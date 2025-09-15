@@ -40,3 +40,39 @@ coverage/
 
 # Yarn v2+ Plug'n'Play
 .pnp.*
+
+# ===== PNSR specific =====
+
+# Backups, dumps y bases locales
+*.sql
+*.sqlite
+*.db
+
+# Subidas y temporales (multer, prints, etc.)
+**/uploads/
+**/tmp/
+**/logs/
+**/.cache/
+**/.vite/
+
+# Tickets/exports generados por el sistema
+**/tickets/
+**/exports/
+**/reports/
+**/prints/
+
+# Datos sensibles o voluminosos (permitimos plantillas en /samples)
+*.xlsx
+*.xls
+*.csv
+!samples/**/*.xlsx
+!samples/**/*.xls
+!samples/**/*.csv
+
+# Caches de herramientas
+.eslintcache
+.stylelintcache
+
+# Variables de entorno en cualquier subcarpeta (pero dejamos ejemplo)
+**/.env*
+!.env.example
