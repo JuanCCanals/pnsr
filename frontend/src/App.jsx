@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
@@ -13,7 +14,6 @@ import Campanias from './pages/Campanias';
 import Modalidades from './pages/Modalidades';
 import PuntosVenta from './pages/PuntosVenta';
 import Ventas from './pages/Ventas';
-// import ImportarFamilias from './pages/ImportarFamilias';
 import Benefactores from './pages/Benefactores';
 import Donaciones from './pages/Donaciones';
 import Servicios from './pages/Servicios';
@@ -32,86 +32,129 @@ function App() {
         <div className="App">
           <Routes>
             {/* Rutas públicas */}
-            <Route 
-              path="/login" 
+            <Route
+              path="/login"
               element={
                 <PublicRoute>
                   <Login />
                 </PublicRoute>
-              } 
+              }
             />
-            
-            {/* Ruta de prueba sin autenticación */}
+
+            {/* Rutas de prueba sin autenticación */}
             <Route path="/test" element={<TestPage />} />
             <Route path="/simple" element={<SimpleTest />} />
 
-            {/* Rutas protegidas */}
-            <Route 
-              path="/" 
+            {/* Shell autenticado */}
+            <Route
+              path="/"
               element={
                 <ProtectedRoute>
                   <MainLayout />
                 </ProtectedRoute>
               }
             >
-              {/* Ruta por defecto */}
+              {/* Home → Dashboard */}
               <Route index element={<Navigate to="/dashboard" replace />} />
-              
-              {/* Dashboard - Accesible para todos los roles */}
+
+              {/* Dashboard: lo dejamos libre para todos los usuarios autenticados */}
               <Route path="dashboard" element={<Dashboard />} />
-              
-              {/* Módulos de consulta - Accesibles para todos los roles */}
-              <Route path="zonas" element={<Zonas />} />
-              <Route path="familias" element={<Familias />} />
+
+              {/* ===== Módulos con gating por PERMISO (slug en permisos.modulo) ===== */}
+              <Route
+                path="zonas"
+                element={
+                  <ProtectedRoute requiredPerm="zonas">
+                    <Zonas />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="familias"
+                element={
+                  <ProtectedRoute requiredPerm="familias">
+                    <Familias />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="ventas"
+                element={
+                  <ProtectedRoute requiredPerm="venta_cajas">
+                    <Ventas />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="benefactores"
+                element={
+                  <ProtectedRoute requiredPerm="familia_benefactor">
+                    <Benefactores />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="cobros"
+                element={
+                  <ProtectedRoute requiredRole={['admin', 'operador']} requiredPerm="ingresos">
+                    <Cobros />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="reportes"
+                element={
+                  <ProtectedRoute requiredPerm="reportes">
+                    <Reportes />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* ===== Rutas sin permiso específico (como las tenías) ===== */}
               <Route path="campanias" element={<Campanias />} />
               <Route path="modalidades" element={<Modalidades />} />
               <Route path="puntosventa" element={<PuntosVenta />} />
-              <Route path="ventas" element={<Ventas />} />
-              {/* <Route path="importar-familias" element={<ImportarFamilias />} /> */}
-              <Route path="benefactores" element={<Benefactores />} />
-              <Route path="comprobantes" element={<Comprobantes />} />
-              <Route path="reportes" element={<Reportes />} />
-              
-              {/* Módulos operativos - Solo admin y operador */}
-              <Route 
-                path="donaciones" 
+              <Route
+                path="donaciones"
                 element={
                   <ProtectedRoute requiredRole={['admin', 'operador']}>
                     <Donaciones />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="cobros" 
+              {/* Servicios y Comprobantes por ahora solo por rol para no romper si no existe el permiso */}
+              <Route
+                path="servicios"
                 element={
                   <ProtectedRoute requiredRole={['admin', 'operador']}>
                     <Servicios />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="usuarios" 
+              <Route path="comprobantes" element={<Comprobantes />} />
+
+              {/* Usuarios / Configuración: solo admin por rol */}
+              <Route
+                path="usuarios"
                 element={
                   <ProtectedRoute requiredRole="admin">
                     <Usuarios />
                   </ProtectedRoute>
                 }
               />
-
-              {/* Configuración - Solo admin */}
-              <Route 
-                path="configuracion" 
+              <Route
+                path="configuracion"
                 element={
                   <ProtectedRoute requiredRole="admin">
                     <Configuracion />
                   </ProtectedRoute>
-                } 
+                }
               />
             </Route>
 
-            {/* Ruta 404 */}
-            <Route 
-              path="*" 
+            {/* 404 */}
+            <Route
+              path="*"
               element={
                 <div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-gray-800">
                   <div className="text-center">
@@ -119,7 +162,7 @@ function App() {
                     <p className="text-xl text-gray-600 dark:text-gray-300 mt-4">
                       Página no encontrada
                     </p>
-                    <button 
+                    <button
                       onClick={() => window.history.back()}
                       className="mt-6 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200"
                     >
@@ -127,7 +170,7 @@ function App() {
                     </button>
                   </div>
                 </div>
-              } 
+              }
             />
           </Routes>
         </div>

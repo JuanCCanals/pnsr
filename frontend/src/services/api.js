@@ -59,9 +59,9 @@ export const usuarioService = {
   delete:    (id)     => api.delete(`/usuarios/${id}`).then(r => r.data),
   toggleStatus:(id)   => api.patch(`/usuarios/${id}/toggle-status`).then(r => r.data),
   getStats:  ()       => api.get('/usuarios/stats').then(r => r.data),
-  getPermisos:()      => api.get('/usuarios/permisos').then(r => r.data),
+  getPermisos:()      => api.get('/permisos').then(r => r.data),
   getUserPermisos:(id)=> api.get(`/usuarios/${id}/permisos`).then(r => r.data),
-};
+ };
 
 // Servicios de zonas
 export const zonasService = {

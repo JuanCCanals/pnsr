@@ -5,6 +5,7 @@ import { familiasService, zonasService } from '../services/api';
 const Familias = () => {
   const { user } = useAuth();
   const [familias, setFamilias] = useState([]);
+  const [importZonaId, setImportZonaId] = useState('');
   const [zonas, setZonas] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
@@ -179,6 +180,11 @@ const Familias = () => {
       return;
     }
 
+    if (!importZonaId) {
+      setErrors({ import: 'Selecciona la zona para este lote de importación' });
+      return;
+    }
+
     setImportLoading(true);
     setErrors({});
 
@@ -186,6 +192,7 @@ const Familias = () => {
       const formData = new FormData();
       // Usamos 'file' para que multer.any() lo reciba sin problemas
       formData.append('file', importFile);
+      formData.append('zona_id', importZonaId);  // zona elegida en el select
 
       // Llamada al backend; devuelve { message: 'Importación completada exitosamente' }
       const result = await familiasService.importExcel(formData);
@@ -193,6 +200,7 @@ const Familias = () => {
       setSuccessMessage(msg);
       setShowImportModal(false);
       setImportFile(null);
+      setImportZonaId('');
       // Limpiar filtros para que veas los nuevos registros
       setSearchTerm('');
       setSelectedZona('');
@@ -647,6 +655,21 @@ const Familias = () => {
               </div>
 
               <form onSubmit={handleImportExcel} className="space-y-4">
+
+              <div>
+                  <label className="block text-sm font-medium mb-1">Zona *</label>
+                  <select
+                    value={importZonaId}
+                    onChange={(e) => setImportZonaId(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    required
+                  >
+                    <option value="">Seleccionar zona…</option>
+                    {zonas.map(z => <option key={z.id} value={z.id}>{z.nombre}</option>)}
+                  </select>
+                </div>
+
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Archivo Excel *
@@ -666,7 +689,7 @@ const Familias = () => {
                 <div className="text-sm text-gray-600 dark:text-gray-400">
                   <p className="mb-2">Formato esperado:</p>
                   <ul className="list-disc list-inside space-y-1">
-                    <li>Columnas: Nº FAMILIA, ZONA, NOMBRE PADRE, APELLIDOS PADRE, etc.</li>
+                    <li>Columnas: Nº FAMILIA, NOMBRE PADRE, APELLIDOS PADRE, etc.</li>
                     <li>Una fila por integrante de familia</li>
                     <li>Los datos de familia se repiten en cada fila</li>
                   </ul>

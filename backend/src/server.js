@@ -6,6 +6,9 @@ const jwt = require('jsonwebtoken');
 const authenticateToken = require('../middlewares/auth');
 const pool = require('../config/db');  
 require('dotenv').config();
+// Cargar .env desde la carpeta backend (no desde src)
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,7 +22,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Test rápido de que Express responde
-app.get('/ping', (_req, res) => {
+app.get('/api/ping', (_req, res) => {
   res.send('pong');
 });
 
@@ -69,16 +72,16 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    // Obtener permisos del usuario
-    const [permisosRows] = await pool.execute(
-      `SELECT p.nombre as permiso 
-       FROM usuario_permisos up 
-       JOIN permisos p ON up.permiso_id = p.id 
-       WHERE up.usuario_id = ?`,
-      [usuario.id]
-    );
-
-    const permisos = permisosRows.map(row => row.permiso);
+  // Obtener permisos del usuario (activos)
+  const [permisosRows] = await pool.execute(
+    `SELECT p.modulo, p.nombre
+      FROM usuario_permisos up 
+      JOIN permisos p ON up.permiso_id = p.id
+      WHERE up.usuario_id = ? AND (up.activo IS NULL OR up.activo = 1) AND (p.activo IS NULL OR p.activo = 1)
+      ORDER BY p.modulo`,
+    [usuario.id]
+  );
+  const permisos = permisosRows.map(r => ({ modulo: r.modulo, nombre: r.nombre }));
 
     // Generar token
     const token = jwt.sign(
@@ -113,14 +116,15 @@ app.get('/api/auth/verify', authenticateToken, async (req, res) => {
   try {
     // Obtener permisos del usuario
     const [permisosRows] = await pool.execute(
-      `SELECT p.nombre as permiso 
-       FROM usuario_permisos up 
-       JOIN permisos p ON up.permiso_id = p.id 
-       WHERE up.usuario_id = ?`,
+      `SELECT p.modulo, p.nombre
+         FROM usuario_permisos up 
+         JOIN permisos p ON up.permiso_id = p.id 
+        WHERE up.usuario_id = ? AND (up.activo IS NULL OR up.activo = 1) AND (p.activo IS NULL OR p.activo = 1)
+        ORDER BY p.modulo`,
       [req.user.id]
     );
-
-    const permisos = permisosRows.map(row => row.permiso);
+    const permisos = permisosRows.map(r => ({ modulo: r.modulo, nombre: r.nombre }));
+    
 
     res.json({
       success: true,
@@ -613,42 +617,41 @@ app.get('/api/usuarios/permisos', authenticateToken, async (req, res) => {
 // ==================== RUTAS MODULARES ====================
 
 // Importar rutas modulares
-const zonasRoutes = require('../routes/zonas');
-const familiasRoutes = require('../routes/familias');
-const cajasRoutes = require('../routes/cajas');
-const serviciosRoutes = require('../routes/servicios');
-const benefactoresRoutes = require('../routes/benefactores');
-const ventasRoute = require('../routes/VentasRoute');
-const serviciosRoute = require('../routes/ServiciosRoute');
-const reportesRoutes = require('../routes/reportes');
+const zonasRoutes           = require('../routes/zonas');
+const familiasRoutes        = require('../routes/familias');
+const familiasImportRoute   = require('../routes/FamiliasImportRoute');
+const cajasRoutes           = require('../routes/cajas');
+const campaniasRoute        = require('../routes/CampaniasRoute');
+const modalidadesRoute      = require('../routes/ModalidadesRoute');
+const puntosVentaRoute      = require('../routes/PuntosVentaRoute');
+const reportesRoutes        = require('../routes/reportes');
+const dashboardRoute        = require('../routes/DashboardRoute');
+const tiposServicioRoute    = require('../routes/tipos-servicio');
 
-// Usar rutas modulares
-app.use('/api/zonas', zonasRoutes);
-//app.use('/api/familias/import', require('../routes/FamiliasImportRoute'));
+// Rutas nuevas/actualizadas que agregamos en esta iteración
+const serviciosRoute        = require('../routes/servicios'); // <-- usa el archivo en minúsculas que te pasé
+const clientesRoute         = require('../routes/clientes');  // <-- nuevo
+const cobrosRoute           = require('../routes/cobros');    // <-- nuevo
+const ventasRoute           = require('../routes/ventas');    // <-- usa el archivo en minúsculas
 
-// IMPORTACIÓN DE EXCEL (primero, para que capture /import-excel)
-app.use(
-  '/api/familias/import-excel',
-  require('../routes/FamiliasImportRoute')  // este router hace POST '/' para importar
-);
+// Usar rutas (orden recomendado)
+app.use('/api/zonas',              zonasRoutes);
+app.use('/api/familias/import-excel', familiasImportRoute);
+app.use('/api/familias',           familiasRoutes);
+app.use('/api/cajas',              cajasRoutes);
+app.use('/api/campanias',          campaniasRoute);
+app.use('/api/modalidades',        modalidadesRoute);
+app.use('/api/puntos-venta',       puntosVentaRoute);
+app.use('/api/tipos-servicio', tiposServicioRoute);
 
-// CRUD normal de familias
-app.use('/api/familias', familiasRoutes);
-app.use('/api/cajas', cajasRoutes);
-app.use('/api/campanias', require('../routes/CampaniasRoute'));
-app.use('/api/modalidades', require('../routes/ModalidadesRoute'));
-app.use('/api/puntos-venta', require('../routes/PuntosVentaRoute'));
-app.use('/api/ventas', require('../routes/VentasRoute'));
-app.use('/api/servicios', serviciosRoutes);
-app.use('/api/benefactores', benefactoresRoutes);
+// Nuevos/actualizados
+app.use('/api/clientes',           clientesRoute);
+app.use('/api/servicios',          serviciosRoute);
+app.use('/api/cobros',             cobrosRoute);
+app.use('/api/ventas',             ventasRoute);
+
 app.use('/api/reportes', reportesRoutes);
 app.use('/api/dashboard', require('../routes/DashboardRoute'));
-
-// Ventas
-app.use('/api/ventas', ventasRoute);
-
-// Servicios Eclesiásticos
-app.use('/api/servicios', serviciosRoute);
 
 // ==================== SERVIDOR ====================
 

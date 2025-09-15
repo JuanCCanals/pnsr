@@ -158,6 +158,7 @@ const Usuarios = () => {
       });
     }
     
+    await loadPermisos();
     setShowModal(true);
   };
 
@@ -298,13 +299,14 @@ const Usuarios = () => {
           />
         </div>
         <button
-          onClick={() => {
+          onClick={async () => {
             resetForm();
+            await loadPermisos();   // <— asegura catálogo fresco
             setShowModal(true);
           }}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-        >
-          Nuevo Usuario
+>
+            Nuevo Usuario
         </button>
       </div>
 
@@ -373,6 +375,7 @@ const Usuarios = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end space-x-2">
                       <button
+                        
                         onClick={() => handleEdit(usuario)}
                         className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
                       >
