@@ -110,5 +110,31 @@ export const serviciosService = {
   getRENIEC: dni=> api.get(`/servicios/reniec/${dni}`).then(res => res.data),
 };
 
+// --- familiasService: agrega estos helpers ---
+familiasService.getById = (id) =>
+  api.get(`/familias/${id}`).then(r => r.data); // { success, data }
+
+familiasService.getIntegrantes = (familiaId) =>
+  api.get(`/familias/${familiaId}/integrantes`).then(r => r.data); // { success, data: [] }
+
+familiasService.getLabelsByZona = (zona_id) =>
+  api.get(`/familias/labels/bulk`, { params: { zona_id } }).then(r => r.data); // { success, data: [] }
+
+// importar excel
+familiasService.importExcel = (formData) =>
+  api.post('/familias/import-excel', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(r => r.data);
+
+// crear / actualizar familia
+familiasService.create = (payload) => api.post('/familias', payload).then(r => r.data);
+familiasService.update = (id, payload) => api.put(`/familias/${id}`, payload).then(r => r.data);
+
+// (por si faltan) etiquetas por zona / integrantes
+familiasService.getLabelsByZona = (zona_id) =>
+  api.get('/familias/labels/bulk', { params: { zona_id } }).then(r => r.data);
+familiasService.getIntegrantes = (familiaId) =>
+  api.get(`/familias/${familiaId}/integrantes`).then(r => r.data);
+
 // Exportar API base
 export default api;

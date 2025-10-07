@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import api from '../services/api';
+import api, { zonasService } from '../services/api';
+import { useEffect } from 'react';
 
 /**
  * ImportarFamilias.jsx
@@ -12,6 +13,17 @@ const ImportarFamilias = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [zonas, setZonas] = useState([]);
+  const [zonaId, setZonaId] = useState("");
+
+  useEffect(() => {
+      (async () => {
+        try {
+          const z = await zonasService.getAll();
+          if (z?.success) setZonas(z.data || []);
+        } catch (e) { console.error(e); }
+      })();
+    }, []);
 
   // Maneja selección de archivo
   const handleFileChange = (e) => {
@@ -25,7 +37,11 @@ const ImportarFamilias = () => {
   // Envía archivo al backend
   const handleUpload = async () => {
     if (!file) {
-      setError('Por favor, selecciona un archivo .xlsx antes de subir.');
+      setError('Por favor, seleccione un archivo .xlsx antes de subir.');
+      return;
+    }
+    if (!zonaId) {
+      setError('Selecciona una zona destino.');
       return;
     }
     setLoading(true);
@@ -33,10 +49,12 @@ const ImportarFamilias = () => {
     setSuccessMsg(null);
     try {
       const formData = new FormData();
-      formData.append('file', file);
-      const res = await api.post('/api/familias/import-excel', formData);
+      formData.append('archivo', file);
+      formData.append('zona_id', zonaId);
+      const res = await api.post('/familias/import-excel', formData);
       setSuccessMsg(res.data.message || 'Importación completada con éxito');
       setFile(null);
+      setZonaId("");
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.message || 'Error importando familias');
@@ -55,6 +73,18 @@ const ImportarFamilias = () => {
         onChange={handleFileChange}
         className="mb-4"
       />
+
+      <div className="mb-4">
+        <label className="block mb-1 text-sm text-gray-600">Zona destino</label>
+        <select
+          value={zonaId}
+          onChange={(e)=>setZonaId(e.target.value)}
+          className="px-3 py-2 border rounded w-full"
+        >
+          <option value="">Selecciona una zona…</option>
+          {zonas.map(z => <option key={z.id} value={z.id}>{z.nombre}</option>)}
+        </select>
+      </div>
 
       {file && (
         <p className="mb-2">Archivo seleccionado: <strong>{file.name}</strong></p>

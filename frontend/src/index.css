@@ -1,3 +1,14 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@media print {
+    /* tamaño real de la térmica */
+    @page { size: 80mm auto; margin: 4mm; }
+
+    /* que cada etiqueta evite cortes feos */
+    .print\:break-inside-avoid { break-inside: avoid; }
+    /* la tarjeta ya mide 80mm de ancho (w-[80mm]), no forces columns */
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+

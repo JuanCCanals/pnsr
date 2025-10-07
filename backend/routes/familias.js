@@ -230,6 +230,74 @@ router.get('/stats', authenticateToken, async (req, res) => {
   }
 });
 
+// === ETIQUETAS POR ZONA (bulk) ===
+// DEBE IR ANTES de `/:id` para que Express no lo capture como {id: "labels"}
+router.get('/labels/bulk', authenticateToken, async (req, res) => {
+  try {
+    const { zona_id } = req.query;
+    if (!zona_id) {
+      return res.status(400).json({ success:false, error:'zona_id requerido' });
+    }
+
+    // Trae familias activas por zona
+    const [familiasRows] = await pool.execute(`
+      SELECT 
+        f.id, f.codigo_unico, f.nombre_padre, f.nombre_madre, f.direccion,
+        f.telefono, f.observaciones, f.zona_id,
+        z.nombre AS zona_nombre, z.abreviatura AS zona_abreviatura
+      FROM familias f
+      LEFT JOIN zonas z ON f.zona_id = z.id
+      WHERE f.zona_id = ? AND f.activo = 1
+      ORDER BY f.codigo_unico
+    `, [zona_id]);
+
+    if (!familiasRows.length) {
+      return res.json({ success:true, data: [] });
+    }
+
+    // Obtener integrantes para todas estas familias de una sola vez
+    const ids = familiasRows.map(f => f.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const [integrantesRows] = await pool.execute(`
+      SELECT 
+        id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      FROM integrantes_familia
+      WHERE familia_id IN (${placeholders})
+      ORDER BY 
+        CASE relacion 
+          WHEN 'padre' THEN 1 
+          WHEN 'madre' THEN 2 
+          ELSE 3 
+        END,
+        fecha_nacimiento DESC
+    `, ids);
+
+    // Agrupar integrantes por familia
+    const integByFam = new Map();
+    for (const it of integrantesRows) {
+      if (!integByFam.has(it.familia_id)) integByFam.set(it.familia_id, []);
+      integByFam.get(it.familia_id).push({
+        ...it,
+        // Si quieres devolver edad calculada aquí:
+        edad: it.fecha_nacimiento ? 
+          Math.max(0, new Date().getFullYear() - new Date(it.fecha_nacimiento).getFullYear()) : null,
+      });
+    }
+
+    // Adjuntar integrantes
+    const data = familiasRows.map(f => ({
+      ...f,
+      integrantes: integByFam.get(f.id) || []
+    }));
+
+    res.json({ success:true, data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success:false, error:'Error listando etiquetas por zona' });
+  }
+});
+
+
 // Obtener una familia por ID con integrantes
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
@@ -257,7 +325,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Obtener integrantes de la familia
     const [integrantesRows] = await pool.execute(`
-      SELECT * FROM integrantes_familia 
+      SELECT id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      FROM integrantes_familia 
       WHERE familia_id = ? 
       ORDER BY 
         CASE relacion 
@@ -371,8 +440,8 @@ router.post('/', authenticateToken, async (req, res) => {
           const fechaNacimiento = integrante.fecha_nacimiento || calcularFechaNacimiento(integrante.edad);
           
           await connection.execute(
-            'INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, observaciones) VALUES (?, ?, ?, ?, ?)',
-            [familiaId, integrante.nombre.trim(), fechaNacimiento, integrante.relacion, integrante.observaciones?.trim() || null]
+            'INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones) VALUES (?, ?, ?, ?, ?, ?)',
+            [familiaId, integrante.nombre.trim(), fechaNacimiento, integrante.relacion, (integrante.sexo === 'M' || integrante.sexo === 'F') ? integrante.sexo : null, integrante.observaciones?.trim() || null]
           );
         }
       }
@@ -812,7 +881,8 @@ router.get('/:id/integrantes', authenticateToken, async (req, res) => {
     const { id } = req.params;
 
     const [rows] = await pool.execute(`
-      SELECT * FROM integrantes_familia 
+      SELECT id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      FROM integrantes_familia 
       WHERE familia_id = ? 
       ORDER BY 
         CASE relacion 
@@ -840,7 +910,7 @@ router.get('/:id/integrantes', authenticateToken, async (req, res) => {
 router.post('/:id/integrantes', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, fecha_nacimiento, relacion, observaciones } = req.body;
+    const { nombre, fecha_nacimiento, relacion, sexo, observaciones } = req.body;
 
     // Validaciones
     if (!nombre || !relacion) {
@@ -864,8 +934,8 @@ router.post('/:id/integrantes', authenticateToken, async (req, res) => {
     }
 
     const [result] = await pool.execute(
-      'INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, observaciones) VALUES (?, ?, ?, ?, ?)',
-      [id, nombre.trim(), fecha_nacimiento || null, relacion, observaciones?.trim() || null]
+      'INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, nombre.trim(), fecha_nacimiento || null, relacion, (sexo === 'M' || sexo === 'F') ? sexo : null, observaciones?.trim() || null]
     );
 
     res.status(201).json({

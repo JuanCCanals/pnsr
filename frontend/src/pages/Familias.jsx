@@ -1,444 +1,387 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { familiasService, zonasService } from '../services/api';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "../contexts/AuthContext";
+import { familiasService, zonasService } from "../services/api";
+import Barcode from "react-barcode";
+
+// === Etiqueta (80 mm) ===
+const Label80 = React.forwardRef(({ familia, integrantes }, ref) => {
+  if (!familia) return null;
+
+  // Preparamos dos columnas (máx. 6 filas por columna)
+  const calcEdad = (fn) => {
+      if (!fn) return "";
+      const d = new Date(fn);
+      if (isNaN(d)) return "";
+      const hoy = new Date();
+      let e = hoy.getFullYear() - d.getFullYear();
+      const m = hoy.getMonth() - d.getMonth();
+      if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
+      return e < 0 ? "" : e;
+    };
+    const filas = (integrantes || []).map((i) => ({
+      relacion: (i.relacion || "").toUpperCase(),
+      sexo: (i.sexo || "").substring(0, 1).toUpperCase(), // si no existe, queda vacío
+      edad: i.edad ?? calcEdad(i.fecha_nacimiento),
+      nombre: i.nombre || i.nombres || "",
+    }));
+
+  const col1 = filas.slice(0, 6);
+  const col2 = filas.slice(6, 12);
+
+  return (
+    <div
+      ref={ref}
+      className="w-[80mm] min-h-[45mm] p-3 border border-gray-300 rounded print:break-inside-avoid mb-3 text-[12px] leading-tight"
+    >
+      {/* encabezado */}
+      <div className="flex items-start justify-between">
+        <div className="pr-2">
+          <div className="font-semibold text-[13px]">
+            {familia.zona_nombre || ""} {familia.parroquia ? `- ${familia.parroquia}` : ""}
+          </div>
+          <div className="text-[12px]">
+            <span className="font-medium">PAPA:</span> {familia.nombre_padre || "-"}
+          </div>
+          <div className="text-[12px]">
+            <span className="font-medium">MAMA:</span> {familia.nombre_madre || "-"}
+          </div>
+        </div>
+        <div className="shrink-0">
+          <Barcode value={familia.codigo_unico} width={1.3} height={38} displayValue={false} />
+        </div>
+      </div>
+
+      {/* tabla de integrantes (una sola columna) */}
+    <div className="mt-1">
+      <table className="w-full border border-gray-400">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">RELACION</th>
+            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">SEXO</th>
+            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">EDAD</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.length === 0 &&
+            Array.from({ length: 12 }).map((_, i) => (
+              <tr key={i}>
+                <td className="border border-gray-400 px-1 py-[2px] h-[14px]"></td>
+                <td className="border border-gray-400 px-1 py-[2px]"></td>
+                <td className="border border-gray-400 px-1 py-[2px]"></td>
+              </tr>
+            ))}
+          {filas.length > 0 &&
+            filas.map((r, i) => (
+              <tr key={i}>
+                <td className="border border-gray-400 px-1 py-[2px]">{r.relacion}</td>
+                <td className="border border-gray-400 px-1 py-[2px]">{r.sexo}</td>
+                <td className="border border-gray-400 px-1 py-[2px]">{r.edad}</td>
+              </tr>
+            ))}
+          {/* relleno opcional para estabilizar alto */}
+          {filas.length > 0 && filas.length < 12 &&
+            Array.from({ length: 12 - filas.length }).map((_, i) => (
+              <tr key={`vacio-${i}`}>
+                <td className="border border-gray-400 px-1 py-[2px]"></td>
+                <td className="border border-gray-400 px-1 py-[2px]"></td>
+                <td className="border border-gray-400 px-1 py-[2px]"></td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
+
+      {/* Observaciones */}
+      {familia.observaciones && (
+        <div className="mt-1 text-[11px]">
+          <span className="font-medium">Observaciones:</span>
+          <div className="whitespace-pre-wrap">{familia.observaciones}</div>
+        </div>
+      )}
+
+      {/* código en pie */}
+      <div className="mt-1 flex justify-center">
+        <Barcode value={familia.codigo_unico} width={1.3} height={28} displayValue />
+      </div>
+    </div>
+  );
+});
+
+// === Modal Genérico ===
+const Modal = ({ title, onClose, children, footer }) => (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-5xl max-h-[92vh] overflow-y-auto">
+      <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+        <h2 className="text-lg font-semibold dark:text-white">{title}</h2>
+        <button onClick={onClose} className="px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 dark:text-gray-200">✕</button>
+      </div>
+      <div className="p-5">{children}</div>
+      {footer && <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700">{footer}</div>}
+    </div>
+  </div>
+);
 
 const Familias = () => {
   const { user } = useAuth();
+
+  // list / filtros
   const [familias, setFamilias] = useState([]);
   const [importZonaId, setImportZonaId] = useState('');
   const [zonas, setZonas] = useState([]);
-  const [stats, setStats] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [editingFamily, setEditingFamily] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedZona, setSelectedZona] = useState('');
-  const [selectedActivo, setSelectedActivo] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pagination, setPagination] = useState({});
-  const [formData, setFormData] = useState({
-    nombre_padre: '',
-    nombre_madre: '',
-    direccion: '',
-    zona_id: '',
-    telefono: '',
-    observaciones: '',
-    integrantes: []
-  });
-  const [errors, setErrors] = useState({});
-  const [successMessage, setSuccessMessage] = useState('');
+  const [search, setSearch] = useState("");
+  const [zonaId, setZonaId] = useState("");
+  const [activo, setActivo] = useState("");
+  const [page, setPage] = useState(1);
+  const limit = 20;
+  const [pagination, setPagination] = useState({ total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+
+  // sort
+  const [sortBy, setSortBy] = useState({ field: "codigo_unico", dir: "asc" });
+
+  // detalle
+  const [showDetalle, setShowDetalle] = useState(false);
+  const [detalle, setDetalle] = useState(null);
+  const [integrantes, setIntegrantes] = useState([]);
+
   const [importFile, setImportFile] = useState(null);
   const [importLoading, setImportLoading] = useState(false);
 
-  // Cargar datos iniciales
-  useEffect(() => {
-    loadFamilias();
-    loadZonas();
-    loadStats();
-  }, [currentPage, searchTerm, selectedZona, selectedActivo]);
+  // etiquetas
+  const [showEtiquetas, setShowEtiquetas] = useState(false);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [labelsData, setLabelsData] = useState([]); // familia(s) + integrantes agrupados
+  const labelPrintRef = useRef(null);
 
-  const loadFamilias = async () => {
+  // load zonas + primer fetch
+  useEffect(() => {
+    (async () => {
+      const z = await zonasService.getAll();
+      if (z?.success) setZonas(z.data || []);
+      await fetchFamilias();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // cambio de filtros/paginación/sort => refetch
+  useEffect(() => {
+    fetchFamilias();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, search, zonaId, activo, sortBy]);
+
+  const fetchFamilias = async () => {
     try {
       setLoading(true);
       const params = {
-        page: currentPage,
-        limit: 20,
-        search: searchTerm || undefined,
-        zona_id: selectedZona || undefined,
-        activo: selectedActivo || undefined
+        page,
+        limit,
+        search: search || undefined,
+        zona_id: zonaId || undefined,
+        activo: activo || undefined,
+        sort_by: sortBy.field,
+        sort_dir: sortBy.dir,
       };
-      
-      const data = await familiasService.getAll(params);
-      if (data.success) {
-        setFamilias(data.data);
-        setPagination(data.pagination);
-      } else {
-        setErrors({ general: data.error || 'Error al cargar familias' });
+      const r = await familiasService.getAll(params);
+      if (r?.success) {
+        setFamilias(r.data || []);
+        setPagination(r.pagination || { total: 0, totalPages: 1, hasPrev: false, hasNext: false });
       }
-    } catch (error) {
-      console.error('Error al cargar familias:', error);
-      setErrors({ general: 'Error de conexión al cargar familias' });
     } finally {
       setLoading(false);
     }
   };
 
-  const loadZonas = async () => {
-    try {
-      const data = await zonasService.getAll();
-      if (data.success) {
-        setZonas(data.data.filter(zona => zona.activo));
-      }
-    } catch (error) {
-      console.error('Error al cargar zonas:', error);
-    }
+  // ===== Tabla (ordenamiento) =====
+  const onSort = (field) => {
+    setSortBy((prev) => {
+      if (prev.field === field) return { field, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return { field, dir: "asc" };
+    });
+  };
+  const sortIcon = (f) => (sortBy.field === f ? (sortBy.dir === "asc" ? "▲" : "▼") : "↕");
+
+  // ===== Detalle =====
+  const openDetalle = async (fila) => {
+    const d = await familiasService.getById(fila.id);
+    let fam = d?.success ? d.data : fila; // fallback
+    const ints = await familiasService.getIntegrantes(fila.id);
+    setDetalle(fam);
+    setIntegrantes(ints?.success ? ints.data : []);
+    setShowDetalle(true);
   };
 
-  const loadStats = async () => {
-    try {
-      const data = await familiasService.getStats();
-      if (data.success) {
-        setStats(data.data);
-      }
-    } catch (error) {
-      console.error('Error al cargar estadísticas:', error);
-    }
+  // ===== Etiquetas =====
+  const imprimirEtiqueta = async (fila) => {
+    // individual
+    const d = await familiasService.getById(fila.id);
+    const ints = await familiasService.getIntegrantes(fila.id);
+    const fam = d?.success ? d.data : fila;
+    setBulkMode(false);
+    setLabelsData([{ familia: fam, integrantes: ints?.success ? ints.data : [] }]);
+    setShowEtiquetas(true);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setErrors({});
-    setSuccessMessage('');
+  const imprimirEtiquetasPorZona = async () => {
+      if (!zonaId) return;
+      try {
+        // 1) preferido: endpoint dedicado de etiquetas por zona
+        const r = await familiasService.getLabelsByZona(zonaId);
+        if (r?.success && Array.isArray(r.data)) {
+          // Si el backend ya devuelve integrantes, úsalos directo
+          const items = r.data.map(f => ({
+            familia: f,
+            integrantes: Array.isArray(f.integrantes) ? f.integrantes : []
+          }));
+          setBulkMode(true);
+          setLabelsData(items);
+          setShowEtiquetas(true);
+          return;
+        }
 
-    try {
-      let data;
-      if (editingFamily) {
-        data = await familiasService.update(editingFamily.id, formData);
-      } else {
-        data = await familiasService.create(formData);
-      }
-
-      if (data.success) {
-        setSuccessMessage(editingFamily ? 'Familia actualizada exitosamente' : 'Familia creada exitosamente');
-        setShowModal(false);
-        resetForm();
-        loadFamilias();
-        loadStats();
-      } else {
-        if (data.errors) {
-          const errorObj = {};
-          data.errors.forEach(error => {
-            errorObj[error.field] = error.message;
-          });
-          setErrors(errorObj);
-        } else {
-          setErrors({ general: data.message || data.error });
+        // si cayó aquí, seguirá al fallback
+      } catch (err) {
+        // Si el backend no tiene /labels/bulk (404), seguimos al fallback
+        if (err?.response?.status !== 404) {
+          console.error(err);
+          return;
         }
       }
-    } catch (error) {
-      console.error('Error al enviar formulario:', error);
-      setErrors({ general: 'Error de conexión' });
-    }
-  };
+      // 2) Fallback: listado normal filtrado por zona
+      try {
+        const list = await familiasService.getAll({ zona_id: zonaId, limit: 1000 });
 
-  const handleEdit = (familia) => {
-    setEditingFamily(familia);
-    setFormData({
-      nombre_padre: familia.nombre_padre || '',
-      nombre_madre: familia.nombre_madre || '',
-      direccion: familia.direccion || '',
-      zona_id: familia.zona_id || '',
-      telefono: familia.telefono || '',
-      observaciones: familia.observaciones || '',
-      integrantes: []
-    });
-    setShowModal(true);
-  };
-
-  const handleToggleStatus = async (id) => {
-    try {
-      const data = await familiasService.toggleStatus(id);
-      if (data.success) {
-        setSuccessMessage(data.message);
-        loadFamilias();
-        loadStats();
-      } else {
-        setErrors({ general: data.message || data.error });
+        if (!list?.success) return;
+        const items = await Promise.all(
+          (list.data || []).map(async (f) => {
+            const ints = await familiasService.getIntegrantes(f.id);
+            return { familia: f, integrantes: ints?.success ? ints.data : [] };
+          })
+        );
+        setBulkMode(true);
+        setLabelsData(items);
+        setShowEtiquetas(true);
+      } catch (e) {
+        console.error(e);
       }
-    } catch (error) {
-      console.error('Error al cambiar estado:', error);
-      setErrors({ general: 'Error de conexión' });
-    }
-  };
+    };
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar esta familia?')) {
-      return;
-    }
+  const doPrint = () => window.print();
 
-    try {
-      const data = await familiasService.delete(id);
-      if (data.success) {
-        setSuccessMessage('Familia eliminada exitosamente');
-        loadFamilias();
-        loadStats();
-      } else {
-        setErrors({ general: data.message || data.error });
-      }
-    } catch (error) {
-      console.error('Error al eliminar familia:', error);
-      setErrors({ general: 'Error de conexión' });
-    }
-  };
-
-  const handleImportExcel = async (e) => {
-    e.preventDefault();
-
-    if (!importFile) {
-    setErrors({ import: 'Selecciona un archivo Excel (.xlsx)' });
-      return;
-    }
-
-    if (!importZonaId) {
-      setErrors({ import: 'Selecciona la zona para este lote de importación' });
-      return;
-    }
-
-    setImportLoading(true);
-    setErrors({});
-
-    try {
-      const formData = new FormData();
-      // Usamos 'file' para que multer.any() lo reciba sin problemas
-      formData.append('file', importFile);
-      formData.append('zona_id', importZonaId);  // zona elegida en el select
-
-      // Llamada al backend; devuelve { message: 'Importación completada exitosamente' }
-      const result = await familiasService.importExcel(formData);
-      const msg = result.message || 'Importación completada exitosamente';
-      setSuccessMessage(msg);
-      setShowImportModal(false);
-      setImportFile(null);
-      setImportZonaId('');
-      // Limpiar filtros para que veas los nuevos registros
-      setSearchTerm('');
-      setSelectedZona('');
-      setSelectedActivo('');
-      // Recargar la lista y estadísticas
-      await loadFamilias();
-      await loadStats();
-
-    } catch (error) {
-      console.error('Error al importar Excel:', error);
-      const msg = error.response?.data?.message || 'Error de conexión durante la importación';
-      setErrors({ import: msg });
-    } finally {
-      setImportLoading(false);
-    }
-  };
-
-  const resetForm = () => {
-    setFormData({
-      nombre_padre: '',
-      nombre_madre: '',
-      direccion: '',
-      zona_id: '',
-      telefono: '',
-      observaciones: '',
-      integrantes: []
-    });
-    setEditingFamily(null);
-    setErrors({});
-  };
-
-  const handleSearch = (e) => {
-    setSearchTerm(e.target.value);
-    setCurrentPage(1);
-  };
-
-  const handleFilterChange = (filterType, value) => {
-    if (filterType === 'zona') {
-      setSelectedZona(value);
-    } else if (filterType === 'activo') {
-      setSelectedActivo(value);
-    }
-    setCurrentPage(1);
-  };
-
-  if (loading && familias.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
+  // ===== Render =====
   return (
     <div className="p-6">
-      {/* Header */}
+      {/* Título */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-          Gestión de Familias
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400">
-          Administra las familias beneficiarias del programa
-        </p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Familias</h1>
+        <p className="text-gray-600 dark:text-gray-400">Listado, detalle y etiquetas.</p>
       </div>
 
-      {/* Mensajes */}
-      {successMessage && (
-        <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">
-          {successMessage}
-        </div>
-      )}
+      {/* Filtros */}
+      <div className="flex flex-col lg:flex-row gap-3 mb-4">
+        <input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          placeholder="Buscar (código, nombres, dirección)..."
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        />
+        <select
+          value={zonaId}
+          onChange={(e) => { setZonaId(e.target.value); setPage(1); }}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">Todas las zonas</option>
+          {zonas.map((z) => (
+            <option key={z.id} value={z.id}>{z.nombre}</option>
+          ))}
+        </select>
+        <select
+          value={activo}
+          onChange={(e) => { setActivo(e.target.value); setPage(1); }}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">Todos</option>
+          <option value="true">Activas</option>
+          <option value="false">Inactivas</option>
+        </select>
 
-      {errors.general && (
-        <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
-          {errors.general}
-        </div>
-      )}
+        <div className="flex-1" />
 
-      {/* Estadísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Familias</h3>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total || 0}</p>
-        </div>
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Activas</h3>
-          <p className="text-2xl font-bold text-green-600">{stats.activas || 0}</p>
-        </div>
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Integrantes</h3>
-          <p className="text-2xl font-bold text-blue-600">{stats.total_integrantes || 0}</p>
-        </div>
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Promedio Integrantes</h3>
-          <p className="text-2xl font-bold text-purple-600">{stats.promedio_integrantes || 0}</p>
-        </div>
-      </div>
+          <div className="flex gap-2">
+            {/* Nueva Familia */}
+            <button
+              type="button"
+              onClick={() => { resetForm(); setShowModal(true); }}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            >
+              Nueva Familia
+            </button>
 
-      {/* Controles */}
-      <div className="flex flex-col lg:flex-row justify-between items-center mb-6 gap-4">
-        <div className="flex flex-col sm:flex-row gap-4 flex-1">
-          <input
-            type="text"
-            placeholder="Buscar familias..."
-            value={searchTerm}
-            onChange={handleSearch}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          />
-          <select
-            value={selectedZona}
-            onChange={(e) => handleFilterChange('zona', e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          >
-            <option value="">Todas las zonas</option>
-            {zonas.map(zona => (
-              <option key={zona.id} value={zona.id}>{zona.nombre}</option>
-            ))}
-          </select>
-          <select
-            value={selectedActivo}
-            onChange={(e) => handleFilterChange('activo', e.target.value)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          >
-            <option value="">Todos los estados</option>
-            <option value="true">Activas</option>
-            <option value="false">Inactivas</option>
-          </select>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-          >
-            Importar Excel
-          </button>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowModal(true);
-            }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-          >
-            Nueva Familia
-          </button>
-        </div>
-      </div>
+            {/* Importar Excel */}
+            <button
+              type="button"
+              onClick={() => setShowImportModal(true)}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            >
+              Importar Excel
+            </button>
 
-      {/* Tabla de familias */}
+            {/* Imprimir etiquetas por zona */}
+            <button
+              onClick={imprimirEtiquetasPorZona}
+              disabled={!zonaId}
+              title={zonaId ? "Imprimir etiquetas por zona" : "Selecciona una zona primero"}
+              className={`px-4 py-2 rounded-lg text-white ${zonaId ? "bg-indigo-600 hover:bg-indigo-700" : "bg-gray-400 cursor-not-allowed"}`}
+            >
+              Imprimir etiquetas por zona
+            </button>
+          </div>
+        </div>
+
+      {/* Tabla */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-700">
+          <table className="min-w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Código
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Familia
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Zona
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Dirección
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Integrantes
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Estado
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                  Acciones
-                </th>
+                {[
+                  ["codigo_unico", "Código"],
+                  ["zona_nombre", "Zona"],
+                  ["direccion", "Dirección"],
+                  ["total_integrantes", "Integrantes"],
+                  ["estado_caja", "Estado Caja"],
+                ].map(([f, label]) => (
+                  <th key={f} className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-600 dark:text-gray-300 cursor-pointer"
+                      onClick={() => onSort(f)}>
+                    {label} <span className="ml-1 opacity-60">{sortIcon(f)}</span>
+                  </th>
+                ))}
+                <th className="px-5 py-3 text-right text-xs font-semibold uppercase text-gray-600 dark:text-gray-300">Acciones</th>
               </tr>
             </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {familias.map((familia) => (
-                <tr key={familia.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
-                    {familia.codigo_unico}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">
-                        {familia.nombre_padre && `${familia.nombre_padre}`}
-                        {familia.nombre_padre && familia.nombre_madre && ' / '}
-                        {familia.nombre_madre && `${familia.nombre_madre}`}
-                      </div>
-                      {familia.telefono && (
-                        <div className="text-sm text-gray-500 dark:text-gray-400">
-                          {familia.telefono}
-                        </div>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    {familia.zona_nombre}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900 dark:text-white max-w-xs truncate">
-                    {familia.direccion}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    {familia.total_integrantes || 0}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                      familia.activo 
-                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
-                        : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'
-                    }`}>
-                      {familia.activo ? 'Activa' : 'Inactiva'}
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {loading && (
+                <tr><td colSpan={6} className="px-5 py-6 text-center">Cargando…</td></tr>
+              )}
+              {!loading && familias.length === 0 && (
+                <tr><td colSpan={6} className="px-5 py-6 text-center text-gray-500">Sin resultados</td></tr>
+              )}
+              {!loading && familias.map((f) => (
+                <tr key={f.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <td className="px-5 py-3 whitespace-nowrap font-semibold">{f.codigo_unico}</td>
+                  <td className="px-5 py-3 whitespace-nowrap">{f.zona_nombre}</td>
+                  <td className="px-5 py-3">{f.direccion}</td>
+                  <td className="px-5 py-3 whitespace-nowrap">{f.total_integrantes || 0}</td>
+                  <td className="px-5 py-3 whitespace-nowrap">
+                    <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
+                      {f.estado_caja || "SIN VENDER"}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex justify-end space-x-2">
-                      <button
-                        onClick={() => handleEdit(familia)}
-                        className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
-                      >
-                        Editar
-                      </button>
-                      <button
-                        onClick={() => handleToggleStatus(familia.id)}
-                        className={`${
-                          familia.activo 
-                            ? 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'
-                            : 'text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300'
-                        }`}
-                      >
-                        {familia.activo ? 'Desactivar' : 'Activar'}
-                      </button>
-                      <button
-                        onClick={() => handleDelete(familia.id)}
-                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                      >
-                        Eliminar
-                      </button>
+                  <td className="px-5 py-3 whitespace-nowrap text-right">
+                    <div className="inline-flex gap-3">
+                      <button onClick={() => openDetalle(f)} className="text-blue-600 hover:underline">Detalles</button>
+                      <button onClick={() => imprimirEtiqueta(f)} className="text-indigo-600 hover:underline">Etiqueta</button>
                     </div>
                   </td>
                 </tr>
@@ -447,278 +390,208 @@ const Familias = () => {
           </table>
         </div>
 
-        {familias.length === 0 && !loading && (
-          <div className="text-center py-8">
-            <p className="text-gray-500 dark:text-gray-400">
-              {searchTerm || selectedZona || selectedActivo ? 'No se encontraron familias que coincidan con los filtros.' : 'No hay familias registradas.'}
-            </p>
+        {/* Paginación simple */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 dark:border-gray-700">
+          <div className="text-sm text-gray-600 dark:text-gray-300">
+            {pagination.total
+              ? <>Mostrando {(page - 1) * limit + 1} – {Math.min(page * limit, pagination.total)} de {pagination.total}</>
+              : "—"}
           </div>
-        )}
-      </div>
-
-      {/* Paginación */}
-      {pagination.totalPages > 1 && (
-        <div className="flex items-center justify-between mt-6">
-          <div className="text-sm text-gray-700 dark:text-gray-300">
-            Mostrando {((pagination.page - 1) * pagination.limit) + 1} a {Math.min(pagination.page * pagination.limit, pagination.total)} de {pagination.total} resultados
-          </div>
-          <div className="flex space-x-2">
+          <div className="flex gap-2">
             <button
-              onClick={() => setCurrentPage(pagination.page - 1)}
               disabled={!pagination.hasPrev}
-              className="px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-3 py-2 border rounded disabled:opacity-50"
             >
               Anterior
             </button>
-            <span className="px-3 py-2 text-sm bg-blue-600 text-white rounded-md">
-              {pagination.page}
-            </span>
+            <span className="px-3 py-2 rounded bg-blue-600 text-white">{page}</span>
             <button
-              onClick={() => setCurrentPage(pagination.page + 1)}
               disabled={!pagination.hasNext}
-              className="px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+              onClick={() => setPage((p) => p + 1)}
+              className="px-3 py-2 border rounded disabled:opacity-50"
             >
               Siguiente
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ===== Modal Detalle ===== */}
+      {showDetalle && detalle && (
+        <Modal
+          title="Detalle de Familia"
+          onClose={() => setShowDetalle(false)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowDetalle(false)} className="px-4 py-2 rounded bg-gray-200">Cerrar</button>
+              <button onClick={() => imprimirEtiqueta(detalle)} className="px-4 py-2 rounded bg-green-600 text-white">
+                Imprimir Etiqueta
+              </button>
+            </div>
+          }
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-600">Nombre padre</label>
+              <input className="w-full border rounded px-2 py-1" value={detalle.nombre_padre || ""} readOnly />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Observación</label>
+              <textarea className="w-full border rounded px-2 py-1" rows={3} value={detalle.observaciones || ""} readOnly />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Nombre madre</label>
+              <input className="w-full border rounded px-2 py-1" value={detalle.nombre_madre || ""} readOnly />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Estado (caja)</label>
+              <input className="w-full border rounded px-2 py-1" value={detalle.estado_caja || "SIN VENDER"} readOnly />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Benefactor</label>
+              <input className="w-full border rounded px-2 py-1" value={detalle.benefactor || ""} readOnly />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Teléfono</label>
+              <input className="w-full border rounded px-2 py-1" value={detalle.telefono || ""} readOnly />
+            </div>
+          </div>
+
+          {/* Integrantes */}
+          <div className="mt-5">
+            <div className="text-sm font-semibold mb-2">Integrantes</div>
+            <div className="overflow-x-auto border rounded">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Alfanumérico</th>
+                    <th className="px-3 py-2 text-left">Relación</th>
+                    <th className="px-3 py-2 text-left">Nombres</th>
+                    <th className="px-3 py-2 text-left">Sexo</th>
+                    <th className="px-3 py-2 text-left">Edad</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {integrantes.map((i, idx) => (
+                    <tr key={idx}>
+                      <td className="px-3 py-2">{detalle.codigo_unico}</td>
+                      <td className="px-3 py-2">{i.relacion}</td>
+                      <td className="px-3 py-2">{i.nombre || i.nombres}</td>
+                      <td className="px-3 py-2">{i.sexo}</td>
+                      <td className="px-3 py-2">{i.edad}</td>
+                    </tr>
+                  ))}
+                  {integrantes.length === 0 && (
+                    <tr>
+                      <td className="px-3 py-4 text-center text-gray-500" colSpan={5}>Sin integrantes registrados</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Modal>
       )}
 
-      {/* Modal de Nueva/Editar Familia */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  {editingFamily ? 'Editar Familia' : 'Nueva Familia'}
-                </h2>
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+      {/* ===== Modal Etiquetas (individual / por zona) ===== */}
+      {showEtiquetas && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-5xl max-h-[92vh] overflow-y-auto print:w-[210mm] print:h-auto">
+            <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h2 className="text-lg font-semibold dark:text-white">
+                {bulkMode ? "Etiquetas por zona" : "Etiqueta de familia"}
+              </h2>
+              <div className="flex gap-2">
+                <button onClick={() => setShowEtiquetas(false)} className="px-3 py-2 rounded bg-gray-200">Cerrar</button>
+                <button onClick={doPrint} className="px-3 py-2 rounded bg-indigo-600 text-white">Imprimir</button>
               </div>
-
-              <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Nombre Padre */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Nombre del Padre
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.nombre_padre}
-                    onChange={(e) => setFormData(prev => ({ ...prev, nombre_padre: e.target.value }))}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${
-                      errors.nombre_padre ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Nombre completo del padre"
-                  />
-                  {errors.nombre_padre && (
-                    <p className="mt-1 text-sm text-red-600">{errors.nombre_padre}</p>
-                  )}
-                </div>
-
-                {/* Nombre Madre */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Nombre de la Madre
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.nombre_madre}
-                    onChange={(e) => setFormData(prev => ({ ...prev, nombre_madre: e.target.value }))}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${
-                      errors.nombre_madre ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Nombre completo de la madre"
-                  />
-                  {errors.nombre_madre && (
-                    <p className="mt-1 text-sm text-red-600">{errors.nombre_madre}</p>
-                  )}
-                </div>
-
-                {/* Dirección */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Dirección *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.direccion}
-                    onChange={(e) => setFormData(prev => ({ ...prev, direccion: e.target.value }))}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${
-                      errors.direccion ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Dirección completa de la familia"
-                    required
-                  />
-                  {errors.direccion && (
-                    <p className="mt-1 text-sm text-red-600">{errors.direccion}</p>
-                  )}
-                </div>
-
-                {/* Zona */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Zona *
-                  </label>
-                  <select
-                    value={formData.zona_id}
-                    onChange={(e) => setFormData(prev => ({ ...prev, zona_id: e.target.value }))}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${
-                      errors.zona_id ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    required
-                  >
-                    <option value="">Seleccionar zona</option>
-                    {zonas.map(zona => (
-                      <option key={zona.id} value={zona.id}>{zona.nombre}</option>
-                    ))}
-                  </select>
-                  {errors.zona_id && (
-                    <p className="mt-1 text-sm text-red-600">{errors.zona_id}</p>
-                  )}
-                </div>
-
-                {/* Teléfono */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Teléfono
-                  </label>
-                  <input
-                    type="tel"
-                    value={formData.telefono}
-                    onChange={(e) => setFormData(prev => ({ ...prev, telefono: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="Número de teléfono"
-                  />
-                </div>
-
-                {/* Observaciones */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Observaciones
-                  </label>
-                  <textarea
-                    value={formData.observaciones}
-                    onChange={(e) => setFormData(prev => ({ ...prev, observaciones: e.target.value }))}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="Observaciones adicionales"
-                  />
-                </div>
-
-                {/* Botones */}
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                  >
-                    {editingFamily ? 'Actualizar' : 'Crear'}
-                  </button>
-                </div>
-              </form>
+            </div>
+            <div ref={labelPrintRef} className="p-4">
+              {labelsData.map(({ familia, integrantes }, idx) => (
+                <Label80 key={familia.id || idx} familia={familia} integrantes={integrantes} />
+              ))}
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal de Importar Excel */}
-      {showImportModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-md w-full">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  Importar Familias desde Excel
-                </h2>
-                <button
-                  onClick={() => setShowImportModal(false)}
-                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
+{showImportModal && (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-lg">
+      <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+        <h2 className="text-lg font-semibold dark:text-white">Importar Excel de Familias</h2>
+        <button onClick={() => setShowImportModal(false)} className="px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 dark:text-gray-200">✕</button>
+      </div>
 
-              <form onSubmit={handleImportExcel} className="space-y-4">
-
-              <div>
-                  <label className="block text-sm font-medium mb-1">Zona *</label>
-                  <select
-                    value={importZonaId}
-                    onChange={(e) => setImportZonaId(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    required
-                  >
-                    <option value="">Seleccionar zona…</option>
-                    {zonas.map(z => <option key={z.id} value={z.id}>{z.nombre}</option>)}
-                  </select>
-                </div>
-
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Archivo Excel *
-                  </label>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={(e) => setImportFile(e.target.files[0])}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    required
-                  />
-                  {errors.import && (
-                    <p className="mt-1 text-sm text-red-600">{errors.import}</p>
-                  )}
-                </div>
-
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  <p className="mb-2">Formato esperado:</p>
-                  <ul className="list-disc list-inside space-y-1">
-                    <li>Columnas: Nº FAMILIA, NOMBRE PADRE, APELLIDOS PADRE, etc.</li>
-                    <li>Una fila por integrante de familia</li>
-                    <li>Los datos de familia se repiten en cada fila</li>
-                  </ul>
-                </div>
-
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowImportModal(false)}
-                    className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={importLoading}
-                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {importLoading ? 'Importando...' : 'Importar'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
+      <div className="p-5 space-y-4">
+        <div>
+          <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Zona destino</label>
+          <select
+            value={importZonaId}
+            onChange={(e)=>setImportZonaId(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">Selecciona una zona</option>
+            {zonas.map(z => (<option key={z.id} value={z.id}>{z.nombre}</option>))}
+          </select>
         </div>
-      )}
+
+        <div>
+          <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Archivo Excel (.xlsx)</label>
+          <input
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={(e)=>setImportFile(e.target.files?.[0] || null)}
+            className="w-full"
+          />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={()=>setShowImportModal(false)} className="px-4 py-2 rounded bg-gray-200">
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={importLoading}
+            onClick={async () => {
+              if (!importFile) { alert('Selecciona un archivo .xlsx'); return; }
+              if (!importZonaId) { alert('Selecciona la zona destino'); return; }
+              try {
+                setImportLoading(true);
+                const fd = new FormData();
+                fd.append('archivo', importFile);     // ← nombre de campo correcto
+                fd.append('zona_id', importZonaId);    // ← requerido por backend
+                const r = await familiasService.importExcel(fd); // helper del service
+                if (r?.success) {
+                  setShowImportModal(false);
+                  setImportFile(null);
+                  setImportZonaId('');
+                  await fetchFamilias?.(); // refresca listado si tienes este helper
+                } else {
+                  alert(r?.error || r?.message || 'No se pudo importar.');
+                }
+              } catch (err) {
+                console.error(err);
+                alert('Error de conexión durante la importación.');
+              } finally {
+                setImportLoading(false);
+              }
+            }}
+            className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-60"
+          >
+            {importLoading ? "Importando..." : "Importar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+
+
     </div>
   );
 };
 
 export default Familias;
-

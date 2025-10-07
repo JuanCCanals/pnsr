@@ -180,6 +180,8 @@ router.post('/', auth, upload.any(), async (req, res) => {
     const nombreInt = get('INTEG_NOMBRES');
     const edad = Number(get('EDAD')) || null;
     const cond = get('CONDICION') || null;
+    const sexoRaw = (get('SEXO') || '').toUpperCase();
+    const sexo = sexoRaw.startsWith('M') ? 'M' : (sexoRaw.startsWith('F') ? 'F' : null);
 
     const key = String(nro);
     if (!grupos.has(key)) grupos.set(key, { familia: { nro, direccion, padre: null, madre: null, total }, integrantes: [] });
@@ -196,6 +198,7 @@ router.post('/', auth, upload.any(), async (req, res) => {
         nombre: nombreInt,
         relacion: rel,
         fecha_nacimiento: calcularFechaNacimiento(edad),
+        sexo,
         observaciones: cond || null
       });
     }
@@ -254,9 +257,9 @@ router.post('/', auth, upload.any(), async (req, res) => {
       // Integrantes (hijos/hijas/otros)
       for (const it of integrantes) {
         await conn.query(
-          `INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, observaciones)
-           VALUES (?,?,?,?,?)`,
-          [familia_id, it.nombre, it.fecha_nacimiento, it.relacion, it.observaciones]
+          `INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones)
+           VALUES (?,?,?,?,?,?)`,
+          [familia_id, it.nombre, it.fecha_nacimiento, it.relacion, it.sexo, it.observaciones]
         );
         integrantesInsertados++;
       }
