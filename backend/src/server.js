@@ -13,22 +13,32 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// === AÑADIDO: no validar token en las rutas de autenticación ===
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+
+// === NO validar token en rutas públicas ===
+const PUBLIC_PATHS = [
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/verify'
+];
+
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/auth')) {
-    return next(); // saltar validación de token en login/register/verify
+  const url = req.originalUrl || req.url || req.path || '';
+  if (PUBLIC_PATHS.some(p => url.startsWith(p))) {
+    return next(); // Saltar validación en /api/auth/*
   }
-  authenticateToken(req, res, next); // aplicar autenticación al resto
+  return authenticateToken(req, res, next); // Aplicar en el resto
 });
-// ================================================================
+// ==========================================
+
 
 // Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // Test rápido de que Express responde
 app.get('/api/ping', (_req, res) => {
@@ -123,13 +133,13 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // Verificar token
-app.get('/api/auth/verify', authenticateToken, async (req, res) => {
+app.get('/api/auth/verify', async (req, res) => {
   try {
     // Obtener permisos del usuario
     const [permisosRows] = await pool.execute(
       `SELECT p.modulo, p.nombre
-         FROM usuario_permisos up 
-         JOIN permisos p ON up.permiso_id = p.id 
+          FROM usuario_permisos up 
+          JOIN permisos p ON up.permiso_id = p.id 
         WHERE up.usuario_id = ? AND (up.activo IS NULL OR up.activo = 1) AND (p.activo IS NULL OR p.activo = 1)
         ORDER BY p.modulo`,
       [req.user.id]
