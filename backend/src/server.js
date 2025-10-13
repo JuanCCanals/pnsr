@@ -10,6 +10,9 @@ require('dotenv').config();
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+const DEMO = process.env.DEMO_MODE === 'true';
+if (DEMO) console.warn('⚠️ DEMO_MODE ENABLED: auth bypassed for demo purposes');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -20,8 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 // === NO validar token en rutas públicas ===
 const PUBLIC_PATHS = [
   '/api/auth/login',
-  '/api/auth/register',
-  '/api/auth/verify'
+  '/api/auth/register'
 ];
 
 app.use((req, res, next) => {
@@ -55,6 +57,23 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    if (DEMO) {
+      const user = {
+        id: 1,
+        nombre: 'Demo User',
+        email,                // el que ponga tu clienta
+        rol: 'admin',
+        permisos: []          // o pon los que quieras mostrar
+      };
+      const token = jwt.sign(
+        { id: user.id, email: user.email, rol: user.rol },
+        process.env.JWT_SECRET || 'demo-secret',
+        { expiresIn: '24h' }
+      );
+      return res.json({ success: true, token, user });
+    }
+    
+
     if (!email || !password) {
       return res.status(400).json({
         success: false,
@@ -64,7 +83,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Buscar usuario
     const [rows] = await pool.execute(
-      'SELECT id, nombre, email, password_hash as password, rol, activo FROM usuarios WHERE email = ?',
+      'SELECT id, nombre, email, COALESCE(password_hash, password) AS password, rol, activo FROM usuarios WHERE email = ?',
       [email]
     );
 
@@ -104,9 +123,9 @@ app.post('/api/auth/login', async (req, res) => {
   );
   const permisos = permisosRows.map(r => ({ modulo: r.modulo, nombre: r.nombre }));
 
-    // Generar token
+    // Generar token (consistente con req.user.id)
     const token = jwt.sign(
-      { userId: usuario.id },
+      { id: usuario.id, email: usuario.email, rol: usuario.rol },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
