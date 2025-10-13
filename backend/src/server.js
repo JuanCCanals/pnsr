@@ -13,7 +13,16 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// === AÑADIDO: no validar token en las rutas de autenticación ===
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/auth')) {
+    return next(); // saltar validación de token en login/register/verify
+  }
+  authenticateToken(req, res, next); // aplicar autenticación al resto
+});
+// ================================================================
+
+// Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true
@@ -25,6 +34,8 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/api/ping', (_req, res) => {
   res.send('pong');
 });
+
+
 
 
 // ==================== RUTAS DE AUTENTICACIÓN ====================
