@@ -83,7 +83,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Buscar usuario
     const [rows] = await pool.execute(
-      'SELECT id, nombre, email, COALESCE(password_hash, password) AS password, rol, activo FROM usuarios WHERE email = ?',
+      'SELECT id, nombre, email, password_hash AS password, rol, activo FROM usuarios WHERE email = ? LIMIT 1',
       [email]
     );
 
