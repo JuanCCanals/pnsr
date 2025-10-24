@@ -2,110 +2,205 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { familiasService, zonasService } from "../services/api";
 import Barcode from "react-barcode";
+import Code128 from "../components/labels/Code128.jsx"; // <-- ajusta la ruta si difiere
+//import BarcodeImg from "../components/labels/BarcodeImg.jsx";
+import BarcodeDataUrl from "../components/labels/BarcodeDataUrl.jsx";
+import JsBarcode from "jsbarcode";
 
-// === Etiqueta (80 mm) ===
-const Label80 = React.forwardRef(({ familia, integrantes }, ref) => {
+// Subcomponente estable (fuera de Label80)
+function TablaIntegrantes({ data, maxRowsPerCol = 5 }) {
+  const fill = Math.max(0, maxRowsPerCol - data.length);
+  return (
+    <table
+      className="table-fixed border border-gray-400 leading-tight w-full"
+      style={{ fontSize: '12px' }}
+    >
+      <thead>
+        <tr className="bg-gray-100">
+          <th className="border border-gray-400 px-1 py-[2px] text-left w-[18mm]" style={{ fontSize: '10px' }}>
+            RELACION
+          </th>
+          <th className="border border-gray-400 px-1 py-[2px] text-left w-[8mm]" style={{ fontSize: '10px' }}>
+            SEXO
+          </th>
+          <th className="border border-gray-400 px-1 py-[2px] text-left w-[8mm]" style={{ fontSize: '10px' }}>
+            EDAD
+          </th>
+        </tr>
+      </thead>
+      <tbody style={{ fontSize: '12px' }}>
+        {data.map((r, i) => (
+          <tr key={i}>
+            <td className="border border-gray-400 px-1 py-[2px]">{r.relacion}</td>
+            <td className="border border-gray-400 px-1 py-[2px]">{r.sexo}</td>
+            <td className="border border-gray-400 px-1 py-[2px]">{r.edad}</td>
+          </tr>
+        ))}
+        {Array.from({ length: fill }).map((_, i) => (
+          <tr key={`vacio-${i}`}>
+            <td className="border border-gray-400 px-1 py-[2px] h-[13px]"></td>
+            <td className="border border-gray-400 px-1 py-[2px]"></td>
+            <td className="border border-gray-400 px-1 py-[2px]"></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+
+// === Etiqueta 101 x 101 mm ===
+const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref) {
   if (!familia) return null;
 
-  // Preparamos dos columnas (máx. 6 filas por columna)
   const calcEdad = (fn) => {
-      if (!fn) return "";
-      const d = new Date(fn);
-      if (isNaN(d)) return "";
-      const hoy = new Date();
-      let e = hoy.getFullYear() - d.getFullYear();
-      const m = hoy.getMonth() - d.getMonth();
-      if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
-      return e < 0 ? "" : e;
-    };
-    const filas = (integrantes || []).map((i) => ({
-      relacion: (i.relacion || "").toUpperCase(),
-      sexo: (i.sexo || "").substring(0, 1).toUpperCase(), // si no existe, queda vacío
-      edad: i.edad ?? calcEdad(i.fecha_nacimiento),
-      nombre: i.nombre || i.nombres || "",
-    }));
+    if (!fn) return "";
+    const d = new Date(fn);
+    if (isNaN(d)) return "";
+    const hoy = new Date();
+    let e = hoy.getFullYear() - d.getFullYear();
+    const m = hoy.getMonth() - d.getMonth();
+    if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
+    return e < 0 ? "" : e;
+  };
 
-  const col1 = filas.slice(0, 6);
-  const col2 = filas.slice(6, 12);
+  // --- Marcadores de observaciones (¹ ² ³ …) por integrante ---
+  // Filtra textos que sean "NINGUNA"/"NINGUNO" (con o sin punto/guiones/espacios)
+  const isNone = (s) => /^\s*ningun[oa][\.\-–—]*\s*$/i.test(s || "");
+
+  const sup = ["¹","²","³","⁴","⁵","⁶","⁷","⁸","⁹"];
+  const obsItems = [];
+  (integrantes || []).forEach((i) => {
+    const raw = (i.observaciones || "");
+    const txt = raw.trim();
+    if (!txt || isNone(txt)) return; // ← ignora "NINGUNA"
+    const mark = sup[obsItems.length] || `[${obsItems.length + 1}]`;
+    obsItems.push({ mark, text: txt });
+    i.__obsMark = mark; // etiqueta para usar en RELACION
+  });
+  const obsRender = obsItems.length
+    ? obsItems.map(o => `${o.mark} ${o.text}`).join("; ")
+    : "";
+
+  const familiaCode = familia.codigo_unico || "";
+  const zonaNombre  = familia.zona_nombre || "";
+
+  const padreFull = [familia.nombre_padre, familia.apellidos_padre].filter(Boolean).join(" ");
+  const madreFull = [familia.nombre_madre, familia.apellidos_madre].filter(Boolean).join(" ");
+
+  const obsConcat = [...new Set(
+    (integrantes || []).map(i => (i.observaciones || "").trim()).filter(Boolean)
+  )].join("; ");
+
+  const filas = (integrantes || []).map((i) => {
+    const baseRel = (i.relacion || "").toUpperCase();
+    const mark = i.__obsMark ? i.__obsMark : "";
+    return {
+      relacion: mark ? `${baseRel}${mark}` : baseRel,
+      sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
+      edad: i.edad ?? calcEdad(i.fecha_nacimiento),
+    };
+  });
+
+  const totalMiembros =
+    (padreFull ? 1 : 0) + (madreFull ? 1 : 0) + filas.length;
+
+  const maxRowsPerCol = 5;
+  const col1 = filas.slice(0, maxRowsPerCol);
+  const col2 = filas.slice(maxRowsPerCol, maxRowsPerCol * 2);
+  const gridColsClass = col2.length > 0 ? "grid-cols-2" : "grid-cols-1"; // ← solo 2 tablas si supera 5
 
   return (
     <div
       ref={ref}
-      className="w-[80mm] min-h-[45mm] p-3 border border-gray-300 rounded print:break-inside-avoid mb-3 text-[12px] leading-tight"
+      className="etiqueta relative w-[101mm] h-[101mm] p-3 border border-gray-300 rounded print:break-inside-avoid mb-3 text-[14px] leading-tight"
     >
-      {/* encabezado */}
+
+      {/* CABECERA: barcode centrado arriba */}
+      <div
+        style={{
+          position: 'absolute',
+          transform: 'translateX(-50%)',
+          top: '5mm',
+          right: '5mm',        // ← respiro de 5mm
+          textAlign: 'right',  // ← alinear a la derecha
+        }}
+      >
+
+        {/* CABECERA: BarcodeDataUrl (img basado en dataURL) + texto pegado */}
+        <BarcodeDataUrl value={familiaCode} barWidth={1.2} barHeight={34} />
+        <div style={{ fontSize: '10px', fontWeight: 600, marginTop: '0.30mm', lineHeight: 1 }}>
+          {familiaCode}
+        </div>
+
+      </div>
+
+      {/* Dejo ~15mm de aire bajo la cabecera */}
+      <div style={{ height: '15mm' }} />
+
+      {/* Zona + totales + observaciones + padres */}
       <div className="flex items-start justify-between">
         <div className="pr-2">
-          <div className="font-semibold text-[13px]">
-            {familia.zona_nombre || ""} {familia.parroquia ? `- ${familia.parroquia}` : ""}
-          </div>
-          <div className="text-[12px]">
-            <span className="font-medium">PAPA:</span> {familia.nombre_padre || "-"}
-          </div>
-          <div className="text-[12px]">
-            <span className="font-medium">MAMA:</span> {familia.nombre_madre || "-"}
+          <div className="font-semibold text-[12px]">{zonaNombre}</div>
+          <div><span className="font-medium">total miembros:</span> {totalMiembros}</div>
+          <div><span className="font-medium text-[14px]">Observaciones:</span> {obsConcat || "—"}</div>
+
+          {/* ↓ padres 1 punto más pequeño */}
+          <div style={{ marginTop: '4mm', fontSize: '12px', lineHeight: 1.1 }}>
+            <div><span className="font-medium">PAPA:</span> {padreFull || "—"}</div>
+            <div><span className="font-medium">MAMA:</span> {madreFull || "—"}</div>
           </div>
         </div>
-        <div className="shrink-0">
-          <Barcode value={familia.codigo_unico} width={1.3} height={38} displayValue={false} />
+        <div className="shrink-0 w-[40mm]" />
+      </div>
+
+      {/* Tablas: siempre dos columnas; si no hay col2, dejamos un placeholder sin cabecera */}
+      <div
+        className="mt-2 grid gap-1"
+        style={{ gridTemplateColumns: '1fr 1fr' }}
+      >
+        <div>
+          <TablaIntegrantes data={col1} maxRowsPerCol={maxRowsPerCol} />
+        </div>
+        <div>
+          {col2.length > 0 ? (
+            <TablaIntegrantes data={col2} maxRowsPerCol={maxRowsPerCol} />
+          ) : (
+            <div style={{border: '0', height: '100%'}} />
+          )}
         </div>
       </div>
 
-      {/* tabla de integrantes (una sola columna) */}
-    <div className="mt-1">
-      <table className="w-full border border-gray-400">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">RELACION</th>
-            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">SEXO</th>
-            <th className="border border-gray-400 px-1 py-[2px] text-[11px] text-left">EDAD</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filas.length === 0 &&
-            Array.from({ length: 12 }).map((_, i) => (
-              <tr key={i}>
-                <td className="border border-gray-400 px-1 py-[2px] h-[14px]"></td>
-                <td className="border border-gray-400 px-1 py-[2px]"></td>
-                <td className="border border-gray-400 px-1 py-[2px]"></td>
-              </tr>
-            ))}
-          {filas.length > 0 &&
-            filas.map((r, i) => (
-              <tr key={i}>
-                <td className="border border-gray-400 px-1 py-[2px]">{r.relacion}</td>
-                <td className="border border-gray-400 px-1 py-[2px]">{r.sexo}</td>
-                <td className="border border-gray-400 px-1 py-[2px]">{r.edad}</td>
-              </tr>
-            ))}
-          {/* relleno opcional para estabilizar alto */}
-          {filas.length > 0 && filas.length < 12 &&
-            Array.from({ length: 12 - filas.length }).map((_, i) => (
-              <tr key={`vacio-${i}`}>
-                <td className="border border-gray-400 px-1 py-[2px]"></td>
-                <td className="border border-gray-400 px-1 py-[2px]"></td>
-                <td className="border border-gray-400 px-1 py-[2px]"></td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
-    </div>
 
-      {/* Observaciones */}
-      {familia.observaciones && (
-        <div className="mt-1 text-[11px]">
-          <span className="font-medium">Observaciones:</span>
-          <div className="whitespace-pre-wrap">{familia.observaciones}</div>
+      {/* Espacio para no chocar con el footer */}
+      <div className="h-[16mm]" />
+
+      {/* FOOTER: barcode centrado al pie */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          bottom: '5mm',
+          textAlign: 'center',
+        }}
+      >
+        
+        {/* FOOTER: BarcodeDataUrl (img basado en dataURL) + texto pegado */}
+        <BarcodeDataUrl value={familiaCode} barWidth={1.25} barHeight={38} />
+        <div style={{ fontSize: '10px', fontWeight: 600, marginTop: '0.25mm', lineHeight: 1 }}>
+          {familiaCode}
         </div>
-      )}
 
-      {/* código en pie */}
-      <div className="mt-1 flex justify-center">
-        <Barcode value={familia.codigo_unico} width={1.3} height={28} displayValue />
       </div>
     </div>
   );
 });
+
+
+
+
+
 
 // === Modal Genérico ===
 const Modal = ({ title, onClose, children, footer }) => (
@@ -154,6 +249,293 @@ const Familias = () => {
   const [bulkMode, setBulkMode] = useState(false);
   const [labelsData, setLabelsData] = useState([]); // familia(s) + integrantes agrupados
   const labelPrintRef = useRef(null);
+
+  const [isPrinting, setIsPrinting] = useState(false);
+
+
+  const handlePrint = async () => {
+    if (!labelsData?.length) {
+      alert('No hay etiquetas para imprimir.');
+      return;
+    }
+  
+    // === Helpers locales (síncronos) ===
+    const mkBarcodeDataUrl = (value, barWidth, barHeight) => {
+      try {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        JsBarcode(svg, String(value || ""), {
+          format: "CODE128",
+          displayValue: false,
+          width: barWidth,
+          height: barHeight,
+          margin: 0,
+        });
+        const xml = new XMLSerializer().serializeToString(svg);
+        const svg64 = btoa(unescape(encodeURIComponent(xml)));
+        return `data:image/svg+xml;base64,${svg64}`;
+      } catch {
+        return "";
+      }
+    };
+  
+    const calcEdad = (fn) => {
+      if (!fn) return "";
+      const d = new Date(fn);
+      if (isNaN(d)) return "";
+      const hoy = new Date();
+      let e = hoy.getFullYear() - d.getFullYear();
+      const m = hoy.getMonth() - d.getMonth();
+      if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
+      return e < 0 ? "" : e;
+    };
+  
+    const escapeHtml = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+  
+    // === Genera el HTML de todas las etiquetas ===
+    const etiquetasHtml = labelsData.map(({ familia, integrantes }) => {
+      const familiaCode = familia?.codigo_unico || "";
+      const zonaNombre  = familia?.zona_nombre  || "";
+  
+      const padreFull = [familia?.nombre_padre, familia?.apellidos_padre].filter(Boolean).join(" ");
+      const madreFull = [familia?.nombre_madre, familia?.apellidos_madre].filter(Boolean).join(" ");
+  
+      // 4.b.1 Marcadores ¹ ² ³ … por integrante con observación
+      const isNone = (s) => /^\s*ningun[oa][\.\-–—]*\s*$/i.test(s || "");
+
+      const sup = ["¹","²","³","⁴","⁵","⁶","⁷","⁸","⁹"];
+      const obsPairs = [];
+      (integrantes || []).forEach((i) => {
+        const raw = (i.observaciones || "");
+        const txt = raw.trim();
+        if (!txt || isNone(txt)) return; // ← ignora "NINGUNA"
+        const mark = sup[obsPairs.length] || `[${obsPairs.length + 1}]`;
+        obsPairs.push({ mark, text: txt });
+        i.__obsMark = mark;
+      });
+      const obsRender = obsPairs.length
+        ? obsPairs.map(o => `${o.mark} ${escapeHtml(o.text)}`).join("; ")
+        : "";
+  
+      // 4.b.2 RELACION con superíndice si aplica
+      const filas = (integrantes || []).map((i) => {
+        const baseRel = (i.relacion || "").toUpperCase();
+        const mark = i.__obsMark ? i.__obsMark : "";
+        return {
+          relacion: mark ? `${baseRel}${mark}` : baseRel,
+          sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
+          edad: i.edad ?? calcEdad(i.fecha_nacimiento),
+        };
+      });
+  
+      const totalMiembros = (padreFull ? 1 : 0) + (madreFull ? 1 : 0) + filas.length;
+  
+      const maxRowsPerCol = 5;
+      const col1 = filas.slice(0, maxRowsPerCol);
+      const col2 = filas.slice(maxRowsPerCol, maxRowsPerCol * 2);
+  
+      const tablaHtml = (rows) => {
+        const fill = Math.max(0, maxRowsPerCol - rows.length);
+        return `
+          <table class="tabla">
+            <thead>
+              <tr>
+                <th class="rel">RELACION</th>
+                <th class="sex">SEXO</th>
+                <th class="eda">EDAD</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => `
+                <tr>
+                  <td class="rel">${escapeHtml(r.relacion)}</td>
+                  <td class="sex">${escapeHtml(r.sexo)}</td>
+                  <td class="eda">${escapeHtml(r.edad ?? "")}</td>
+                </tr>
+              `).join("")}
+              ${Array.from({ length: fill }).map(() => `
+                <tr><td class="rel"></td><td class="sex"></td><td class="eda"></td></tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      };
+  
+      // SIEMPRE dos columnas; si no hay col2, placeholder
+      const gridHtml = `
+        <div class="grid two">
+          <div>${tablaHtml(col1)}</div>
+          <div>${col2.length > 0 ? tablaHtml(col2) : '<div class="tabla-placeholder"></div>'}</div>
+        </div>
+      `;
+  
+      // Barcodes (data URLs) — listos ya
+      const topSrc = mkBarcodeDataUrl(familiaCode, 1.2, 34);
+      const botSrc = mkBarcodeDataUrl(familiaCode, 1.25, 38);
+  
+      return `
+        <div class="etiqueta">
+          <!-- CABECERA -->
+          <div class="hdr">
+            ${topSrc ? `<img src="${topSrc}" alt="" class="bar" />` : ""}
+            <div class="code">${escapeHtml(familiaCode)}</div>
+          </div>
+  
+          <!-- subir 10mm: de 20mm a 10mm -->
+          <div style="height:10mm"></div>
+  
+          <!-- Zona + totales + observaciones + padres -->
+          <div class="row">
+            <div class="colL">
+              <div class="zona">${escapeHtml(zonaNombre)}</div>
+              <div><span class="b">total miembros:</span> ${escapeHtml(totalMiembros)}</div>
+  
+              <!-- 4.b.3 Observaciones a 9px con marcadores -->
+              <div style="font-size:12x; line-height:1.1;">
+                <span class="b">Observaciones:</span> ${obsRender || "—"}
+              </div>
+  
+              <div class="padres">
+                <div><span class="b">PAPA:</span> ${escapeHtml(padreFull || "—")}</div>
+                <div><span class="b">MAMA:</span> ${escapeHtml(madreFull || "—")}</div>
+              </div>
+            </div>
+            <div class="colR"></div>
+          </div>
+  
+          <!-- TABLAS -->
+          ${gridHtml}
+  
+          <div style="height:10mm"></div>
+  
+          <!-- FOOTER -->
+          <div class="ftr">
+            ${botSrc ? `<img src="${botSrc}" alt="" class="bar" />` : ""}
+            <div class="code">${escapeHtml(familiaCode)}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  
+    // === Crea iframe oculto ===
+    const iframe = document.createElement('iframe');
+    Object.assign(iframe.style, {
+      position: 'fixed',
+      right: '0',
+      bottom: '0',
+      width: '0',
+      height: '0',
+      border: '0',
+    });
+    document.body.appendChild(iframe);
+  
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+  
+    // === CSS crítico (incluye 2 columnas y bordes nítidos) ===
+    const criticalCSS = `
+      @page { size: 101mm 101mm; margin: 0; }
+      html, body {
+        margin: 0 !important; padding: 0 !important; background: #fff !important;
+        -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      }
+      * { box-shadow: none !important; }
+      img { max-width: none !important; }
+  
+      .etiqueta {
+        position: relative; width: 101mm; height: 101mm; page-break-after: always; break-inside: avoid;
+        padding: 3mm; border: 0.4mm solid #000; border-radius: 2mm;
+        font-family: Arial, sans-serif; font-size: 11px; line-height: 1.2;
+      }
+      .etiqueta:last-child { page-break-after: auto; }
+  
+      .hdr { 
+        position: absolute;
+        top: 3mm;
+        right: 5mm;           /* ← respiro de 5mm */
+        text-align: right; 
+      }
+      .ftr { 
+        position: absolute; 
+        left: 50%; 
+        transform: translateX(-50%); 
+        bottom: 3mm; 
+        text-align: center; 
+      }
+      .bar { display: block; }
+      .code { font-size: 11px; font-weight: 600; margin-top: 0.25mm; line-height: 1; }
+  
+      .row { display: flex; align-items: flex-start; justify-content: space-between; }
+      .colL { padding-right: 2mm; }
+      .colR { width: 40mm; flex: 0 0 40mm; }
+  
+      .zona { font-weight: 600; font-size: 12px; }
+      /* 4.b.4: PAPA/MAMA a 11px */
+      .padres { margin-top: 3mm; font-size: 11px; line-height: 1.1; }
+      .b { font-weight: 600; }
+  
+      /* --- TABLAS: siempre 2 columnas --- */
+      .grid { margin-top: 2mm; display: grid; gap: 1mm; }
+      .grid.two { grid-template-columns: 1fr 1fr; }
+      .grid > div { min-width: 0; }
+  
+      /* Bordes bien visibles en impresión */
+      table.tabla {
+        width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed;
+        border: 0.35mm solid #000;
+      }
+      table.tabla thead tr { background: #eee; }
+      table.tabla th, table.tabla td {
+        border: 0.35mm solid #000;
+        padding: 0.6mm 1mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      /* 4.b.4: Contenido de tabla a 12px */
+      table.tabla tbody { font-size: 12px; }
+  
+      /* Anchos en % para que entren lado a lado */
+      table.tabla th.rel, table.tabla td.rel { width: 60%; text-align: left; font-size: 10px; }
+      table.tabla th.sex, table.tabla td.sex { width: 20%; text-align: left; font-size: 10px; }
+      table.tabla th.eda, table.tabla td.eda { width: 20%; text-align: left; font-size: 10px; }
+  
+      /* Placeholder derecho cuando no hay segunda tabla */
+      .tabla-placeholder { width: 100%; height: 100%; }
+    `;
+  
+    // === Escribe documento ===
+    doc.open();
+    doc.write(`<!doctype html><html><head><meta charset="utf-8"><style>${criticalCSS}</style></head><body>${etiquetasHtml}</body></html>`);
+    doc.close();
+  
+    // === Espera imágenes y dispara impresión ===
+    const waitImages = async () => {
+      const imgs = Array.from(doc.images || []);
+      if (imgs.length === 0) return;
+      await Promise.all(imgs.map((im) => {
+        if (im.complete && im.naturalWidth > 0) return Promise.resolve();
+        return new Promise((res) => {
+          const done = () => res();
+          im.addEventListener("load", done, { once: true });
+          im.addEventListener("error", done, { once: true });
+        });
+      }));
+    };
+  
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await waitImages();
+    await new Promise(r => requestAnimationFrame(r));
+  
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => document.body.removeChild(iframe), 500);
+  };
+  
+  
+  
+  
+  
+  
 
   // load zonas + primer fetch
   useEffect(() => {
@@ -224,48 +606,56 @@ const Familias = () => {
   };
 
   const imprimirEtiquetasPorZona = async () => {
-      if (!zonaId) return;
-      try {
-        // 1) preferido: endpoint dedicado de etiquetas por zona
-        const r = await familiasService.getLabelsByZona(zonaId);
-        if (r?.success && Array.isArray(r.data)) {
-          // Si el backend ya devuelve integrantes, úsalos directo
-          const items = r.data.map(f => ({
-            familia: f,
-            integrantes: Array.isArray(f.integrantes) ? f.integrantes : []
-          }));
-          setBulkMode(true);
-          setLabelsData(items);
-          setShowEtiquetas(true);
-          return;
-        }
-
-        // si cayó aquí, seguirá al fallback
-      } catch (err) {
-        // Si el backend no tiene /labels/bulk (404), seguimos al fallback
-        if (err?.response?.status !== 404) {
-          console.error(err);
-          return;
-        }
-      }
-      // 2) Fallback: listado normal filtrado por zona
-      try {
-        const list = await familiasService.getAll({ zona_id: zonaId, limit: 1000 });
-
-        if (!list?.success) return;
+    if (!zonaId) return;
+    try {
+      // 1) Preferido: endpoint dedicado de etiquetas por zona
+      const r = await familiasService.getLabelsByZona(zonaId);
+      if (r?.success && Array.isArray(r.data)) {
+        // Carga integrantes si no vinieron en la respuesta
         const items = await Promise.all(
-          (list.data || []).map(async (f) => {
-            const ints = await familiasService.getIntegrantes(f.id);
-            return { familia: f, integrantes: ints?.success ? ints.data : [] };
+          r.data.map(async (f) => {
+            let ints = Array.isArray(f.integrantes) ? f.integrantes : null;
+            if (!ints || ints.length === 0) {
+              const res = await familiasService.getIntegrantes(f.id);
+              ints = res?.success ? (res.data || []) : [];
+            }
+            return { familia: f, integrantes: ints };
           })
         );
         setBulkMode(true);
         setLabelsData(items);
         setShowEtiquetas(true);
-      } catch (e) {
-        console.error(e);
+        return;
       }
-    };
+    } catch (err) {
+      // Si el backend no tiene /labels/bulk (404), seguimos al fallback
+      if (err?.response?.status !== 404) {
+        console.error(err);
+        return;
+      }
+    }
+  
+    // 2) Fallback: listado normal filtrado por zona
+    try {
+      const list = await familiasService.getAll({ zona_id: zonaId, limit: 1000 });
+      if (!list?.success) return;
+  
+      const items = await Promise.all(
+        (list.data || []).map(async (f) => {
+          const res = await familiasService.getIntegrantes(f.id);
+          const ints = res?.success ? (res.data || []) : [];
+          return { familia: f, integrantes: ints };
+        })
+      );
+  
+      setBulkMode(true);
+      setLabelsData(items);
+      setShowEtiquetas(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  
 
   const doPrint = () => window.print();
 
@@ -494,27 +884,62 @@ const Familias = () => {
         </Modal>
       )}
 
+
       {/* ===== Modal Etiquetas (individual / por zona) ===== */}
       {showEtiquetas && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-5xl max-h-[92vh] overflow-y-auto print:w-[210mm] print:h-auto">
-            <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-white">
-                {bulkMode ? "Etiquetas por zona" : "Etiqueta de familia"}
-              </h2>
-              <div className="flex gap-2">
-                <button onClick={() => setShowEtiquetas(false)} className="px-3 py-2 rounded bg-gray-200">Cerrar</button>
-                <button onClick={doPrint} className="px-3 py-2 rounded bg-indigo-600 text-white">Imprimir</button>
+        <>
+          {/* Overlay & preview (NO se imprime) */}
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 no-print">
+            <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-5xl max-h-[92vh] overflow-y-auto">
+              {/* Header con botones */}
+              <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                <h2 className="text-lg font-semibold dark:text-white">
+                  {bulkMode ? "Etiquetas por zona" : "Etiqueta de familia"}
+                </h2>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowEtiquetas(false)}
+                    className="px-4 py-2 rounded bg-gray-200"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="px-4 py-2 rounded bg-indigo-600 text-white"
+                  >
+                    Imprimir
+                  </button>
+                </div>
+              </div>
+
+              {/* Vista previa en pantalla (lo que clonaremos para imprimir) */}
+              <div className="p-4">
+                <div id="preview-root">
+                  {labelsData.map(({ familia, integrantes }, idx) => (
+                    <Label80 key={familia.id || idx} familia={familia} integrantes={integrantes} />
+                  ))}
+                </div>
               </div>
             </div>
-            <div ref={labelPrintRef} className="p-4">
-              {labelsData.map(({ familia, integrantes }, idx) => (
-                <Label80 key={familia.id || idx} familia={familia} integrantes={integrantes} />
-              ))}
-            </div>
           </div>
-        </div>
+
+          {/* SOLO PARA IMPRESIÓN: fuera del overlay, sin sombras ni scrolls */}
+          <div id="print-root" className={isPrinting ? "print-only" : "hidden"}>
+            {labelsData.map(({ familia, integrantes }, idx) => (
+              <Label80
+                key={`print-${familia.id || idx}`}
+                familia={familia}
+                integrantes={integrantes}
+              />
+            ))}
+          </div>
+        </>
       )}
+
+
+
 
 {showImportModal && (
   <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">

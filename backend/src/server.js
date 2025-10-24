@@ -26,16 +26,6 @@ const PUBLIC_PATHS = [
   '/api/auth/register'
 ];
 
-app.use((req, res, next) => {
-  const url = req.originalUrl || req.url || req.path || '';
-  if (PUBLIC_PATHS.some(p => url.startsWith(p))) {
-    return next(); // Saltar validación en /api/auth/*
-  }
-  return authenticateToken(req, res, next); // Aplicar en el resto
-});
-// ==========================================
-
-
 // Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
@@ -46,6 +36,18 @@ app.use(cors({
 app.get('/api/ping', (_req, res) => {
   res.send('pong');
 });
+
+app.use((req, res, next) => {
+  const url = req.originalUrl || req.url || req.path || '';
+  if (PUBLIC_PATHS.some(p => url.startsWith(p))) {
+    return next(); // Saltar validación en /api/auth/*
+  }
+  return authenticateToken(req, res, next); // Aplicar en el resto
+});
+// ==========================================
+
+
+
 
 
 
