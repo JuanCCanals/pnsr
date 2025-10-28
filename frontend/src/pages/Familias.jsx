@@ -436,72 +436,67 @@ const Familias = () => {
   
     // === CSS crítico (incluye 2 columnas y bordes nítidos) ===
     const criticalCSS = `
-      @page { size: 101mm 101mm; margin: 0; }
-      html, body {
-        margin: 0 !important; padding: 0 !important; background: #fff !important;
-        -webkit-print-color-adjust: exact; print-color-adjust: exact;
-      }
-      * { box-shadow: none !important; }
-      img { max-width: none !important; }
+    @page { size: 101mm 101mm; margin: 0; }
+    html, body {
+      margin: 0 !important; padding: 0 !important; background: #fff !important;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    * { box-shadow: none !important; }
+    img { max-width: none !important; }
   
-      .etiqueta {
-        position: relative; width: 101mm; height: 101mm; page-break-after: always; break-inside: avoid;
-        padding: 3mm; border: 0.4mm solid #000; border-radius: 2mm;
-        font-family: Arial, sans-serif; font-size: 11px; line-height: 1.2;
-      }
-      .etiqueta:last-child { page-break-after: auto; }
+    /* +1px: base de la etiqueta */
+    .etiqueta {
+      position: relative; width: 101mm; height: 101mm; page-break-after: always; break-inside: avoid;
+      padding: 3mm; border: 0.4mm solid #000; border-radius: 2mm;
+      font-family: Arial, sans-serif; font-size: 12px; line-height: 1.25; /* antes 11px */
+    }
+    .etiqueta:last-child { page-break-after: auto; }
   
-      .hdr { 
-        position: absolute;
-        top: 3mm;
-        right: 5mm;           /* ← respiro de 5mm */
-        text-align: right; 
-      }
-      .ftr { 
-        position: absolute; 
-        left: 50%; 
-        transform: translateX(-50%); 
-        bottom: 3mm; 
-        text-align: center; 
-      }
-      .bar { display: block; }
-      .code { font-size: 11px; font-weight: 600; margin-top: 0.25mm; line-height: 1; }
+    .hdr { position: absolute; top: 3mm; right: 5mm; text-align: right; }
+    .ftr { position: absolute; left: 50%; transform: translateX(-50%); bottom: 3mm; text-align: center; }
+    .bar { display: block; }
   
-      .row { display: flex; align-items: flex-start; justify-content: space-between; }
-      .colL { padding-right: 2mm; }
-      .colR { width: 40mm; flex: 0 0 40mm; }
+    /* +1px: texto bajo el código */
+    .code { font-size: 12px; font-weight: 600; margin-top: 0.25mm; line-height: 1; } /* antes 11px */
   
-      .zona { font-weight: 600; font-size: 12px; }
-      /* 4.b.4: PAPA/MAMA a 11px */
-      .padres { margin-top: 3mm; font-size: 11px; line-height: 1.1; }
-      .b { font-weight: 600; }
+    .row { display: flex; align-items: flex-start; justify-content: space-between; }
+    .colL { padding-right: 2mm; }
+    .colR { width: 40mm; flex: 0 0 40mm; }
   
-      /* --- TABLAS: siempre 2 columnas --- */
-      .grid { margin-top: 2mm; display: grid; gap: 1mm; }
-      .grid.two { grid-template-columns: 1fr 1fr; }
-      .grid > div { min-width: 0; }
+    /* +1px: zona y padres */
+    .zona { font-weight: 600; font-size: 13px; }            /* antes 12px */
+    .padres { margin-top: 3mm; font-size: 12px; line-height: 1.15; } /* antes 11px */
+    .b { font-weight: 600; }
   
-      /* Bordes bien visibles en impresión */
-      table.tabla {
-        width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed;
-        border: 0.35mm solid #000;
-      }
-      table.tabla thead tr { background: #eee; }
-      table.tabla th, table.tabla td {
-        border: 0.35mm solid #000;
-        padding: 0.6mm 1mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      /* 4.b.4: Contenido de tabla a 12px */
-      table.tabla tbody { font-size: 12px; }
+    .grid { margin-top: 2mm; display: grid; gap: 1mm; }
+    .grid.two { grid-template-columns: 1fr 1fr; }
+    .grid > div { min-width: 0; }
   
-      /* Anchos en % para que entren lado a lado */
-      table.tabla th.rel, table.tabla td.rel { width: 60%; text-align: left; font-size: 10px; }
-      table.tabla th.sex, table.tabla td.sex { width: 20%; text-align: left; font-size: 10px; }
-      table.tabla th.eda, table.tabla td.eda { width: 20%; text-align: left; font-size: 10px; }
+    /* base de tabla se mantiene neutral; el cuerpo sube +1px más abajo */
+    table.tabla {
+      width: 100%; border-collapse: collapse; table-layout: fixed;
+      border: 0.35mm solid #000;
+    }
+    table.tabla thead tr { background: #eee; }
+    table.tabla th, table.tabla td {
+      border: 0.35mm solid #000;
+      padding: 0.6mm 1mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
   
-      /* Placeholder derecho cuando no hay segunda tabla */
-      .tabla-placeholder { width: 100%; height: 100%; }
-    `;
+    /* ⛔ encabezado SIN cambio */
+    table.tabla th.rel, table.tabla th.sex, table.tabla th.eda { font-size: 10px; } /* igual que antes */
+  
+    /* ✅ +1px solo en el cuerpo */
+    table.tabla tbody { font-size: 13px; } /* si antes era 12px */
+  
+    /* anchos */
+    table.tabla th.rel, table.tabla td.rel { width: 60%; text-align: left; }
+    table.tabla th.sex, table.tabla td.sex { width: 20%; text-align: left; }
+    table.tabla th.eda, table.tabla td.eda { width: 20%; text-align: left; }
+  
+    .tabla-placeholder { width: 100%; height: 100%; }
+  `;
+  
   
     // === Escribe documento ===
     doc.open();
