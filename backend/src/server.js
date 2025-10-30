@@ -10,6 +10,10 @@ require('dotenv').config();
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+const benefactoresRoutes = require('../routes/benefactores');
+const ventasRoutes = require('../routes/ventas');
+const catalogosRoutes = require('../routes/catalogos');
+
 const DEMO = process.env.DEMO_MODE === 'true';
 if (DEMO) console.warn('⚠️ DEMO_MODE ENABLED: auth bypassed for demo purposes');
 
@@ -44,6 +48,10 @@ app.use((req, res, next) => {
   }
   return authenticateToken(req, res, next); // Aplicar en el resto
 });
+
+app.use('/api/benefactores', benefactoresRoutes);
+app.use('/api/ventas', ventasRoutes);
+app.use('/api/catalogos', catalogosRoutes);
 // ==========================================
 
 

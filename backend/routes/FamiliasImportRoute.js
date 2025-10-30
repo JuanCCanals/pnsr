@@ -185,8 +185,12 @@ async function parseWorkbook(buffer) {
       const pos = idx[k];
       if (!pos) return '';
       const cell = row.getCell(pos);
-      const val = (cell.text ?? cell.value ?? '').toString().trim();
-      return val;
+      if (!cell || cell.value == null) return '';
+      // ExcelJS puede devolver objetos { text, hyperlink } o strings directos
+      if (typeof cell.value === 'object' && cell.value.text) {
+        return String(cell.value.text).trim();
+      }
+      return String(cell.text || cell.value || '').trim();
     };
 
     const nro = get('NRO_FAMILIA');

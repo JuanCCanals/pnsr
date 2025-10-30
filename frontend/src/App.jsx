@@ -78,18 +78,10 @@ function App() {
                 }
               />
               <Route
-                path="ventas"
+                path="benefactores"
                 element={
                   <ProtectedRoute requiredPerm="venta_cajas">
                     <Ventas />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="benefactores"
-                element={
-                  <ProtectedRoute requiredPerm="familia_benefactor">
-                    <Benefactores />
                   </ProtectedRoute>
                 }
               />

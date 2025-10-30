@@ -1,282 +1,223 @@
-// src/pages/Ventas.js
-// /src/pages/Ventas.jsx
-import React, { useEffect, useState } from 'react';
+// /frontend/src/pages/Ventas.jsx
+import React, { useEffect, useState, useMemo } from 'react';
 
-/* ================== Helpers HTTP (fetch + JWT) ================== */
-async function httpGet(url) {
-  const token = localStorage.getItem('token');
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  return res.json();
-}
-
-async function httpJSON(url, method, body) {
+const authFetch = async (url, opts={}) => {
   const token = localStorage.getItem('token');
   const res = await fetch(url, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(body)
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(opts.headers || {})
+    }
   });
   return res.json();
-}
+};
 
-/* =============== Endpoints usados por esta vista =============== */
-// Busca caja por código (ya existente en tu backend)
-async function buscarCajaPorCodigo(codigo) {
-  return httpGet(`/api/ventas/box/${encodeURIComponent(codigo)}`);
-}
-
-// Lista modalidades y puntos de venta (ya existen)
-async function listarModalidades() {
-  return httpGet('/api/modalidades');
-}
-async function listarPuntosVenta() {
-  return httpGet('/api/puntos-venta');
-}
-
-// Registrar venta de caja (endpoint que agregamos en backend)
-async function registrarVentaCaja({ caja_id, benefactor_id, modalidad_id, punto_venta_id, monto, moneda='PEN' }) {
-  return httpJSON('/api/ventas', 'POST', {
-    caja_id,
-    benefactor_id: benefactor_id || null,
-    modalidad_id,
-    punto_venta_id,
-    monto,
-    moneda
-  });
-}
-
-/* ========================== Componente ========================== */
 export default function Ventas() {
-  const [codigo, setCodigo] = useState('');
-  const [caja, setCaja] = useState(null);
-  const [modalidades, setModalidades] = useState([]);
-  const [puntosVenta, setPuntosVenta] = useState([]);
-  const [form, setForm] = useState({
-    modalidad_id: '',
-    punto_venta_id: '',
-    monto: '',
-    benefactor_id: '' // opcional
-  });
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState({ type: '', text: '' });
+  const [show, setShow] = useState(true);
+  const [recibo, setRecibo] = useState('');
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0,10));
+  const [puntoVenta, setPuntoVenta] = useState('');
+  const [formaPago, setFormaPago] = useState('Efectivo');
+  const [estado, setEstado] = useState('Entregada a Benefactor');
+  const [monto, setMonto] = useState('40.00');
 
-  // Cargar combos al abrir
+  const [codigo, setCodigo] = useState('');
+  const [items, setItems] = useState([]); // {codigo, ok, error, detalle?}
+
+  const [bf, setBf] = useState({ nombres: '', apellidos: '', telefono: '', correo: '' });
+  const [msg, setMsg] = useState({ type: '', text: '' });
+  const total = useMemo(() => Number(monto || 0), [monto]);
+
+  const [modalidades, setModalidades] = useState([]);      // [{id,nombre,costo}]
+  const [puntos, setPuntos] = useState([]);                // [{id,nombre}]
+  const [modalidadId, setModalidadId] = useState(null);
+  const [puntoVentaId, setPuntoVentaId] = useState(null);
+
   useEffect(() => {
     (async () => {
-      try {
-        const [mods, pv] = await Promise.all([listarModalidades(), listarPuntosVenta()]);
-        if (mods?.success) setModalidades(mods.data || []);
-        if (pv?.success) setPuntosVenta(pv.data || []);
-      } catch (e) {
-        console.error(e);
+      const token = localStorage.getItem('token');
+      const [mRes, pRes] = await Promise.all([
+        fetch('/api/catalogos/modalidades', { headers: { Authorization: `Bearer ${token}` } }).then(r=>r.json()),
+        fetch('/api/catalogos/puntos-venta', { headers: { Authorization: `Bearer ${token}` } }).then(r=>r.json())
+      ]);
+      if (mRes?.success) {
+        setModalidades(mRes.data || []);
+        if (mRes.data?.length) {
+          setModalidadId(mRes.data[0].id);
+          setMonto(String(Number(mRes.data[0].costo || 0).toFixed(2))); // ← setea monto
+        }
+      }
+      if (pRes?.success) {
+        setPuntos(pRes.data || []);
+        if (pRes.data?.length) setPuntoVentaId(pRes.data[0].id);
       }
     })();
   }, []);
 
-  const handleBuscar = async () => {
-    setMsg({ type: '', text: '' });
-    setCaja(null);
-    if (!codigo.trim()) {
-      setMsg({ type: 'error', text: 'Ingresa el código de la caja.' });
-      return;
-    }
-    try {
-      setLoading(true);
-      const resp = await buscarCajaPorCodigo(codigo.trim());
-      if (!resp?.success) {
-        setMsg({ type: 'error', text: resp?.error || 'No se encontró la caja.' });
-        return;
-      }
-      setCaja(resp.data);
-      // Pre-set benefactor si viene en la caja
-      setForm(prev => ({
-        ...prev,
-        benefactor_id: resp.data?.benefactor_id || ''
-      }));
-    } catch (e) {
-      console.error('Error buscando caja:', e);
-      setMsg({ type: 'error', text: 'Error de conexión al buscar la caja.' });
-    } finally {
-      setLoading(false);
+  // cuando cambia modalidad, actualizar monto
+  useEffect(() => {
+    const mod = modalidades.find(m => m.id === modalidadId);
+    if (mod) setMonto(String(Number(mod.costo || 0).toFixed(2)));
+  }, [modalidadId, modalidades]);
+
+  const addCodigo = async () => {
+    const cod = (codigo || '').trim();
+    if (!cod) return;
+    setCodigo('');
+    // valida contra API
+    const resp = await authFetch(`/api/ventas/box/${encodeURIComponent(cod)}`);
+    if (resp?.success) {
+      setItems(prev => [...prev, { codigo: cod, ok: true }]);
+    } else {
+      setItems(prev => [...prev, { codigo: cod, ok: false, error: resp?.error || 'No válida' }]);
     }
   };
 
-  const handleRegistrar = async () => {
-    setMsg({ type: '', text: '' });
-    if (!caja?.id) {
-      setMsg({ type: 'error', text: 'Primero busca y selecciona una caja válida.' });
-      return;
-    }
-    if (!form.modalidad_id || !form.punto_venta_id || !form.monto) {
-      setMsg({ type: 'error', text: 'Completa modalidad, punto de venta y monto.' });
-      return;
-    }
+  const removeItem = (idx) => setItems(prev => prev.filter((_,i) => i!==idx));
 
-    try {
-      setLoading(true);
-      const payload = {
-        caja_id: Number(caja.id),
-        benefactor_id: form.benefactor_id ? Number(form.benefactor_id) : null,
-        modalidad_id: Number(form.modalidad_id),
-        punto_venta_id: Number(form.punto_venta_id),
-        monto: Number(form.monto),
-        moneda: 'PEN'
-      };
-      const resp = await registrarVentaCaja(payload);
-      if (resp?.success) {
-        setMsg({ type: 'success', text: 'Venta registrada correctamente.' });
-        // Limpia form y caja
-        setForm({ modalidad_id: '', punto_venta_id: '', monto: '', benefactor_id: '' });
-        setCaja(null);
-        setCodigo('');
-      } else {
-        setMsg({ type: 'error', text: resp?.error || 'No se pudo registrar la venta.' });
-      }
-    } catch (e) {
-      console.error('Error registrando venta:', e);
-      setMsg({ type: 'error', text: 'Error de conexión al registrar la venta.' });
-    } finally {
-      setLoading(false);
+  const handleGrabar = async () => {
+    setMsg({ type:'', text:'' });
+    if (!recibo.trim()) return setMsg({ type:'error', text:'Coloca el No. de recibo' });
+    const codigos = items.filter(i => i.ok).map(i => i.codigo);
+    if (codigos.length === 0) return setMsg({ type:'error', text:'Agrega al menos una caja válida' });
+    if (!bf.nombres.trim()) return setMsg({ type:'error', text:'Ingresa el nombre del benefactor' });
+
+    const payload = {
+      recibo: recibo.trim(),
+      fecha,
+      modalidad_id: modalidadId,
+      punto_venta_id: puntoVentaId,
+      forma_pago: formaPago || null,
+      estado,
+      monto: Number(monto || 0),
+      moneda: 'PEN',
+      benefactor: bf,
+      codigos
+    };
+
+    const resp = await authFetch('/api/ventas', { method:'POST', body: JSON.stringify(payload) });
+    if (resp?.success) {
+      setMsg({ type:'success', text:'Registro guardado' });
+      setItems([]);
+      setRecibo(''); setBf({nombres:'',apellidos:'',telefono:'',correo:''});
+    } else {
+      setMsg({ type:'error', text: resp?.error || 'No se pudo guardar' });
     }
   };
+
+  if (!show) return null;
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Ventas de Cajas</h1>
-        <p className="text-gray-600 dark:text-gray-400">Busca la caja por código, completa los datos y registra la venta.</p>
-      </div>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white w-[980px] rounded-xl shadow-lg p-6">
+        <h2 className="text-xl font-bold mb-4">Registro de Benefactor / Asignación de Cajas</h2>
 
-      {/* Mensajes */}
-      {msg.text && (
-        <div className={`mb-4 p-4 rounded border ${msg.type === 'success'
-          ? 'bg-green-100 border-green-300 text-green-800'
-          : 'bg-red-100 border-red-300 text-red-800'}`}>
-          {msg.text}
-        </div>
-      )}
-
-      {/* Buscar caja */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-6">
-        <div className="flex flex-col md:flex-row gap-3 items-start md:items-end">
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Código de caja</label>
-            <input
-              type="text"
-              value={codigo}
-              onChange={(e) => setCodigo(e.target.value)}
-              placeholder="Ej: A001-023"
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            />
-          </div>
-          <button
-            onClick={handleBuscar}
-            disabled={loading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Buscando...' : 'Buscar'}
-          </button>
-        </div>
-
-        {/* Datos de la caja encontrada */}
-        {caja && (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-3 rounded border bg-gray-50 dark:bg-gray-700 dark:border-gray-600">
-              <div className="text-xs text-gray-500">Código</div>
-              <div className="font-semibold text-gray-900 dark:text-white">{caja.codigo}</div>
-            </div>
-            <div className="p-3 rounded border bg-gray-50 dark:bg-gray-700 dark:border-gray-600">
-              <div className="text-xs text-gray-500">Zona</div>
-              <div className="font-semibold text-gray-900 dark:text-white">{caja.zona_nombre || '-'}</div>
-            </div>
-            <div className="p-3 rounded border bg-gray-50 dark:bg-gray-700 dark:border-gray-600">
-              <div className="text-xs text-gray-500">Estado</div>
-              <div className="font-semibold text-gray-900 dark:text-white capitalize">{caja.estado || '-'}</div>
-            </div>
-            <div className="p-3 rounded border bg-gray-50 dark:bg-gray-700 dark:border-gray-600 col-span-1 md:col-span-3">
-              <div className="text-xs text-gray-500">Familia / Benefactor</div>
-              <div className="font-medium text-gray-900 dark:text-white">
-                {caja.familia_nombre || caja.benefactor_nombre || '—'}
-              </div>
-            </div>
+        {msg.text && (
+          <div className={`mb-3 px-3 py-2 rounded ${msg.type==='success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+            {msg.text}
           </div>
         )}
-      </div>
 
-      {/* Form de registro */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Modalidad */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Modalidad *</label>
-            <select
-              value={form.modalidad_id}
-              onChange={(e) => setForm(prev => ({ ...prev, modalidad_id: e.target.value }))}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            >
-              <option value="">Selecciona</option>
-              {modalidades.map(m => (
-                <option key={m.id || m.value} value={m.id || m.value}>
-                  {m.nombre || m.label}
-                </option>
-              ))}
+        {/* Cabecera */}
+        <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-3 gap-3 items-end">
+            <label className="col-span-1 text-sm">No. Recibo</label>
+            <input className="col-span-2 border rounded px-2 py-1" value={recibo} onChange={e=>setRecibo(e.target.value)} />
+
+            {/* Modalidad */}
+            <label className="col-span-1 text-sm">Modalidad</label>
+            <select className="col-span-2 border rounded px-2 py-1" value={modalidadId || ''} onChange={e=>setModalidadId(Number(e.target.value))}>
+              {modalidades.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+            </select>
+
+            <label className="col-span-1 text-sm">Monto</label>
+            <input className="col-span-2 border rounded px-2 py-1 bg-gray-100" value={monto} readOnly />
+
+            {/* Punto de Venta */}
+            <label className="col-span-1 text-sm">Pto. Venta</label>
+            <select className="col-span-2 border rounded px-2 py-1" value={puntoVentaId || ''} onChange={e=>setPuntoVentaId(Number(e.target.value))}>
+              {puntos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+
+            <label className="col-span-1 text-sm">Forma pago</label>
+            <select className="col-span-2 border rounded px-2 py-1" value={formaPago} onChange={e=>setFormaPago(e.target.value)}>
+              <option>Efectivo</option><option>Yape</option><option>Plin</option><option>Transferencia</option>
             </select>
           </div>
 
-          {/* Punto de venta */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Punto de Venta *</label>
-            <select
-              value={form.punto_venta_id}
-              onChange={(e) => setForm(prev => ({ ...prev, punto_venta_id: e.target.value }))}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            >
-              <option value="">Selecciona</option>
-              {puntosVenta.map(p => (
-                <option key={p.id || p.value} value={p.id || p.value}>
-                  {p.nombre || p.label}
-                </option>
-              ))}
+          <div className="grid grid-cols-3 gap-3 items-end">
+            <label className="col-span-1 text-sm">Fecha</label>
+            <input type="date" className="col-span-2 border rounded px-2 py-1" value={fecha} onChange={e=>setFecha(e.target.value)} />
+
+            <label className="col-span-1 text-sm">Alfanumérico</label>
+            <div className="col-span-2 flex gap-2">
+              <input className="flex-1 border rounded px-2 py-1" value={codigo} onChange={e=>setCodigo(e.target.value)} />
+              <button onClick={addCodigo} className="px-3 py-1 rounded bg-blue-600 text-white">Agregar</button>
+            </div>
+
+            <label className="col-span-1 text-sm">Estado</label>
+            <select className="col-span-2 border rounded px-2 py-1" value={estado} onChange={e=>setEstado(e.target.value)}>
+              <option>Entregada a Benefactor</option>
+              <option>Reservada</option>
             </select>
-          </div>
-
-          {/* Monto */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Monto (S/.) *</label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.monto}
-              onChange={(e) => setForm(prev => ({ ...prev, monto: e.target.value }))}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-              placeholder="0.00"
-            />
-          </div>
-
-          {/* Benefactor ID (opcional) */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Benefactor ID (opcional)</label>
-            <input
-              type="number"
-              min="1"
-              value={form.benefactor_id}
-              onChange={(e) => setForm(prev => ({ ...prev, benefactor_id: e.target.value }))}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-              placeholder="Si lo conoces, colócalo"
-            />
           </div>
         </div>
 
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={handleRegistrar}
-            disabled={loading || !caja}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-          >
-            {loading ? 'Guardando...' : 'Registrar venta'}
-          </button>
+        {/* Benefactor */}
+        <div className="mt-5">
+          <h3 className="font-semibold mb-2">Benefactor</h3>
+          <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-3 gap-3 items-end">
+              <label className="text-sm">Nombre</label>
+              <input className="col-span-2 border rounded px-2 py-1" value={bf.nombres} onChange={e=>setBf({...bf, nombres:e.target.value})} />
+              <label className="text-sm">Apellido</label>
+              <input className="col-span-2 border rounded px-2 py-1" value={bf.apellidos} onChange={e=>setBf({...bf, apellidos:e.target.value})} />
+            </div>
+            <div className="grid grid-cols-3 gap-3 items-end">
+              <label className="text-sm">Teléfono</label>
+              <input className="col-span-2 border rounded px-2 py-1" value={bf.telefono} onChange={e=>setBf({...bf, telefono:e.target.value})} />
+              <label className="text-sm">Correo</label>
+              <input className="col-span-2 border rounded px-2 py-1" value={bf.correo} onChange={e=>setBf({...bf, correo:e.target.value})} />
+            </div>
+          </div>
+        </div>
+
+        {/* Tabla */}
+        <div className="mt-6">
+          <table className="w-full border border-gray-300 text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-1 text-left">Alfanumérico</th>
+                <th className="border px-2 py-1 text-left">Estado</th>
+                <th className="border px-2 py-1 text-left">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it, idx) => (
+                <tr key={idx}>
+                  <td className="border px-2 py-1">{it.codigo}</td>
+                  <td className={`border px-2 py-1 ${it.ok ? 'text-green-700' : 'text-red-700'}`}>{it.ok ? 'OK' : it.error || 'Error'}</td>
+                  <td className="border px-2 py-1">
+                    <button onClick={()=>removeItem(idx)} className="px-2 py-1 bg-black text-white rounded">Eliminar</button>
+                  </td>
+                </tr>
+              ))}
+              {items.length === 0 && (
+                <tr><td className="border px-2 py-2 text-center text-gray-500" colSpan="3">Sin cajas añadidas</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-6 flex justify-between">
+          <div className="text-sm font-semibold">Total: S/ {total.toFixed(2)}</div>
+          <div className="space-x-2">
+            <button className="px-3 py-2 rounded bg-gray-200" onClick={()=>setShow(false)}>Salir</button>
+            <button className="px-3 py-2 rounded bg-green-600 text-white" onClick={handleGrabar}>Grabar</button>
+          </div>
         </div>
       </div>
     </div>

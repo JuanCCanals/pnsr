@@ -1,532 +1,257 @@
+// backend/routes/benefactores.js
+// backend/routes/ventas.js
 const express = require('express');
 const router = express.Router();
 
-// Función para obtener el pool de conexiones
-const getPool = () => {
-  const mysql = require('mysql2/promise');
-  const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pnsr_db',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-  };
-  return mysql.createPool(dbConfig);
-};
+const pool = require('../config/db');
+const authenticateToken = require('../middlewares/auth');
 
-const pool = getPool();
+/**
+ * Helper: busca una caja por su código alfanumérico.
+ * Devuelve info útil para validar disponibilidad y enlazar familia/zona.
+ */
+async function getCajaByCodigo(conn, codigo) {
+  const [rows] = await conn.query(
+    `SELECT 
+        c.id            AS caja_id,
+        c.codigo        AS codigo,
+        c.estado        AS estado,
+        c.benefactor_id AS benefactor_id,
+        c.familia_id    AS familia_id,
+        f.zona_id       AS zona_id,
+        f.codigo_unico  AS familia_codigo,
+        f.nombre_padre, f.nombre_madre, f.direccion
+        FROM cajas c
+        LEFT JOIN familias f ON f.id = c.familia_id
+        WHERE c.codigo = ?
+        LIMIT 1`,
+    [codigo]
+  );
+  return rows[0];
+}
 
-// Middleware de autenticación simplificado
-const authenticateToken = async (req, res, next) => {
+/**
+ * GET /api/ventas/box/:codigo
+ * Valida un código de caja antes de agregarlo al carrito del popup.
+ */
+router.get('/box/:codigo', authenticateToken, async (req, res) => {
+  const codigo = decodeURIComponent(req.params.codigo || '').trim();
+  if (!codigo) return res.status(400).json({ success: false, error: 'Código requerido' });
+  const conn = await pool.getConnection();
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+    const caja = await getCajaByCodigo(conn, codigo);
+    if (!caja) return res.json({ success: false, error: 'No existe la caja' });
 
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Token de acceso requerido'
-      });
+    // Si manejas estados en "cajas", valida disponibilidad:
+    if (caja.estado && caja.estado.toLowerCase() !== 'disponible' && caja.estado.toLowerCase() !== 'libre') {
+      return res.json({ success: false, error: `Caja en estado: ${caja.estado}` });
     }
 
-    req.user = { id: 1, rol: 'admin' };
-    next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      error: 'Token inválido'
-    });
-  }
-};
-
-// ==================== RUTAS DE BENEFACTORES ====================
-
-// Obtener todos los benefactores
-router.get('/', authenticateToken, async (req, res) => {
-  try {
-    const { activo, search, page = 1, limit = 50 } = req.query;
-    
-    let whereConditions = [];
-    let queryParams = [];
-    
-    if (activo !== undefined) {
-      whereConditions.push('b.activo = ?');
-      queryParams.push(activo === 'true' ? 1 : 0);
-    }
-    
-    if (search) {
-      whereConditions.push(`(
-        b.nombre LIKE ? OR 
-        b.dni LIKE ? OR 
-        b.telefono LIKE ? OR
-        b.email LIKE ?
-      )`);
-      const searchTerm = `%${search}%`;
-      queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
-    }
-    
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-    
-    // Consulta principal con paginación
-    const offset = (page - 1) * limit;
-    const [rows] = await pool.execute(`
-      SELECT 
-        b.id,
-        b.nombre,
-        b.dni,
-        b.telefono,
-        b.email,
-        b.direccion,
-        b.activo,
-        b.observaciones,
-        b.created_at,
-        b.updated_at,
-        COUNT(c.id) as total_cajas_asignadas,
-        COUNT(CASE WHEN c.estado = 'asignada' THEN 1 END) as cajas_asignadas,
-        COUNT(CASE WHEN c.estado = 'entregada' THEN 1 END) as cajas_entregadas,
-        COUNT(CASE WHEN c.estado = 'devuelta' THEN 1 END) as cajas_devueltas
-      FROM benefactores b
-      LEFT JOIN cajas c ON b.id = c.benefactor_id
-      ${whereClause}
-      GROUP BY b.id, b.nombre, b.dni, b.telefono, b.email, b.direccion, 
-               b.activo, b.observaciones, b.created_at, b.updated_at
-      ORDER BY b.nombre
-      LIMIT ? OFFSET ?
-    `, [...queryParams, parseInt(limit), parseInt(offset)]);
-
-    // Contar total de registros
-    const [countRows] = await pool.execute(`
-      SELECT COUNT(*) as total
-      FROM benefactores b
-      ${whereClause}
-    `, queryParams);
-
-    const total = countRows[0].total;
-    const totalPages = Math.ceil(total / limit);
-
-    res.json({
-      success: true,
-      data: rows,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1
-      }
-    });
-  } catch (error) {
-    console.error('Error al obtener benefactores:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
+    return res.json({ success: true, data: caja });
+  } catch (e) {
+    console.error('GET /ventas/box/:codigo', e);
+    return res.status(500).json({ success: false, error: 'Error buscando caja' });
+  } finally {
+    conn.release();
   }
 });
 
-// Obtener estadísticas de benefactores
-router.get('/stats', authenticateToken, async (req, res) => {
-  try {
-    const [totalRows] = await pool.execute('SELECT COUNT(*) as total FROM benefactores');
-    const [activosRows] = await pool.execute('SELECT COUNT(*) as activos FROM benefactores WHERE activo = 1');
-    
-    const [cajasRows] = await pool.execute(`
-      SELECT 
-        COUNT(*) as total_cajas_asignadas,
-        COUNT(CASE WHEN c.estado = 'asignada' THEN 1 END) as cajas_asignadas,
-        COUNT(CASE WHEN c.estado = 'entregada' THEN 1 END) as cajas_entregadas,
-        COUNT(CASE WHEN c.estado = 'devuelta' THEN 1 END) as cajas_devueltas
-      FROM cajas c
-      INNER JOIN benefactores b ON c.benefactor_id = b.id
-      WHERE b.activo = 1
-    `);
-
-    const [topBenefactoresRows] = await pool.execute(`
-      SELECT 
-        b.nombre,
-        COUNT(c.id) as total_cajas
-      FROM benefactores b
-      INNER JOIN cajas c ON b.id = c.benefactor_id
-      WHERE b.activo = 1
-      GROUP BY b.id, b.nombre
-      ORDER BY total_cajas DESC
-      LIMIT 10
-    `);
-
-    res.json({
-      success: true,
-      data: {
-        total: totalRows[0].total,
-        activos: activosRows[0].activos,
-        cajas_stats: cajasRows[0],
-        top_benefactores: topBenefactoresRows,
-        porcentaje_activos: totalRows[0].total > 0 ? 
-          (activosRows[0].activos / totalRows[0].total * 100).toFixed(1) : 0
-      }
-    });
-  } catch (error) {
-    console.error('Error al obtener estadísticas:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
-// Obtener un benefactor por ID
-router.get('/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const [rows] = await pool.execute(`
-      SELECT * FROM benefactores WHERE id = ?
-    `, [id]);
-
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Benefactor no encontrado'
-      });
-    }
-
-    // Obtener cajas asignadas
-    const [cajasRows] = await pool.execute(`
-      SELECT 
-        c.*,
-        f.codigo_unico as familia_codigo,
-        f.nombre_padre,
-        f.nombre_madre,
-        z.nombre as zona_nombre
-      FROM cajas c
-      INNER JOIN familias f ON c.familia_id = f.id
-      INNER JOIN zonas z ON f.zona_id = z.id
-      WHERE c.benefactor_id = ?
-      ORDER BY c.created_at DESC
-    `, [id]);
-
-    const benefactor = rows[0];
-    benefactor.cajas = cajasRows;
-
-    res.json({
-      success: true,
-      data: benefactor
-    });
-  } catch (error) {
-    console.error('Error al obtener benefactor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
-// Crear nuevo benefactor
+/**
+ * POST /api/ventas
+ * Crea una venta (cabecera) y N filas en ventas_cajas (detalle).
+ * Payload esperado:
+ * {
+ *   "recibo": "02418",
+ *   "fecha": "2025-09-24",
+ *   "punto_venta_id": 1,            // opcional
+ *   "forma_pago": "Efectivo",       // opcional
+ *   "estado": "Entregada a Benefactor", // opcional (default)
+ *   "monto": 40.00,                 // total del recibo
+ *   "moneda": "PEN",                // default PEN
+ *   "benefactor": {
+ *     "id": 123,                    // opcional (si existe)
+ *     "nombre": "JUAN PÉREZ",
+ *     "dni": "12345678",            // opcional si tu tabla lo exige
+ *     "telefono": "999999999",
+ *     "email": "a@b.com",
+ *     "direccion": "AV. X 123",
+ *     "observaciones": null
+ *   },
+ *   "codigos": ["STA001","LIM072"]  // códigos alfanuméricos de caja
+ * }
+ */
 router.post('/', authenticateToken, async (req, res) => {
+  const {
+    recibo, fecha, punto_venta_id,
+    forma_pago, estado = 'Entregada a Benefactor',
+    monto, moneda = 'PEN',
+    benefactor, codigos
+  } = req.body || {};
+
+  // Validaciones rápidas
+  if (!recibo?.trim()) return res.status(400).json({ success: false, error: 'No. de recibo es requerido' });
+  if (!fecha) return res.status(400).json({ success: false, error: 'Fecha es requerida' });
+  if (!benefactor || !benefactor.nombre?.trim())
+    return res.status(400).json({ success: false, error: 'Nombre de benefactor es requerido' });
+  if (!Array.isArray(codigos) || codigos.length === 0)
+    return res.status(400).json({ success: false, error: 'Agrega al menos una caja' });
+
+  const conn = await pool.getConnection();
   try {
-    const { nombre, dni, telefono, email, direccion, observaciones } = req.body;
+    await conn.beginTransaction();
 
-    // Validaciones básicas
-    const errors = [];
-    
-    if (!nombre || nombre.trim().length < 2) {
-      errors.push({ field: 'nombre', message: 'El nombre debe tener al menos 2 caracteres' });
-    }
-    
-    if (!dni || dni.trim().length !== 8) {
-      errors.push({ field: 'dni', message: 'El DNI debe tener 8 dígitos' });
+    // 0) Recibo único (cabecera "ventas")
+    const [dup] = await conn.query('SELECT id FROM ventas WHERE recibo = ? LIMIT 1', [recibo.trim()]);
+    if (dup.length) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, error: 'Recibo ya registrado' });
     }
 
-    if (errors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        errors,
-        message: 'Datos de entrada inválidos'
-      });
+    // 1) Upsert de benefactor (ajustado a tus columnas)
+    let benefactorId = benefactor.id || null;
+
+    if (benefactorId) {
+      await conn.query(
+        `UPDATE benefactores
+        SET nombre = ?, dni = ?, telefono = ?, email = ?, direccion = ?, observaciones = ?
+        WHERE id = ?`,
+        [
+          benefactor.nombre.trim(),
+          benefactor.dni?.trim() || null,
+          benefactor.telefono?.trim() || null,
+          benefactor.email?.trim() || null,
+          (benefactor.direccion?.trim() || null),
+          benefactor.observaciones?.trim() || null,
+          Number(benefactorId),
+        ]
+      );
+    } else {
+      // Si tu tabla exige DNI único y no lo envían, podrías permitir NULL (ver ALTER sugerido).
+      const [insB] = await conn.query(
+        `INSERT INTO benefactores (nombre, dni, telefono, email, direccion, observaciones, activo)
+        VALUES (?,?,?,?,?,?,1)`,
+        [
+          benefactor.nombre.trim(),
+          benefactor.dni?.trim() || null,
+          benefactor.telefono?.trim() || null,
+          benefactor.email?.trim() || null,
+          (benefactor.direccion?.trim() || null),
+          benefactor.observaciones?.trim() || null
+        ]
+      );
+      benefactorId = insB.insertId;
     }
 
-    // Verificar si el DNI ya existe
-    const [existingDni] = await pool.execute(
-      'SELECT id FROM benefactores WHERE dni = ?',
-      [dni.trim()]
-    );
-
-    if (existingDni.length > 0) {
-      return res.status(400).json({
-        success: false,
-        errors: [{ field: 'dni', message: 'Ya existe un benefactor con este DNI' }],
-        message: 'DNI duplicado'
-      });
-    }
-
-    // Insertar benefactor
-    const [result] = await pool.execute(
-      'INSERT INTO benefactores (nombre, dni, telefono, email, direccion, observaciones) VALUES (?, ?, ?, ?, ?, ?)',
+    // 2) Insert cabecera "ventas"
+    const [insV] = await conn.query(
+      `INSERT INTO ventas
+        (recibo, fecha, benefactor_id, punto_venta_id, forma_pago, estado, monto, moneda)
+        VALUES (?,?,?,?,?,?,?,?)`,
       [
-        nombre.trim(),
-        dni.trim(),
-        telefono?.trim() || null,
-        email?.trim() || null,
-        direccion?.trim() || null,
-        observaciones?.trim() || null
+        recibo.trim(),
+        fecha,
+        benefactorId,
+        punto_venta_id || null,
+        forma_pago || null,
+        estado || 'Entregada a Benefactor',
+        Number(monto || 0),
+        moneda || 'PEN'
       ]
     );
+    const ventaId = insV.insertId;
 
-    res.status(201).json({
-      success: true,
-      data: {
-        id: result.insertId,
-        nombre: nombre.trim(),
-        dni: dni.trim(),
-        telefono: telefono?.trim() || null,
-        email: email?.trim() || null,
-        direccion: direccion?.trim() || null,
-        observaciones: observaciones?.trim() || null,
-        activo: true
-      },
-      message: 'Benefactor creado exitosamente'
-    });
+    // 3) Itera códigos y crea detalle + marca cajas
+    for (const raw of codigos) {
+      const codigo = String(raw || '').trim();
+      if (!codigo) continue;
 
-  } catch (error) {
-    console.error('Error al crear benefactor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
+      const caja = await getCajaByCodigo(conn, codigo);
+      if (!caja) throw new Error(`Caja ${codigo} no existe`);
 
-// Actualizar benefactor
-router.put('/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nombre, dni, telefono, email, direccion, observaciones, activo } = req.body;
-
-    // Verificar si el benefactor existe
-    const [existingBenefactor] = await pool.execute(
-      'SELECT id FROM benefactores WHERE id = ?',
-      [id]
-    );
-
-    if (existingBenefactor.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Benefactor no encontrado'
-      });
-    }
-
-    // Verificar DNI duplicado si se está actualizando
-    if (dni) {
-      const [existingDni] = await pool.execute(
-        'SELECT id FROM benefactores WHERE dni = ? AND id != ?',
-        [dni.trim(), id]
-      );
-
-      if (existingDni.length > 0) {
-        return res.status(400).json({
-          success: false,
-          errors: [{ field: 'dni', message: 'Ya existe otro benefactor con este DNI' }],
-          message: 'DNI duplicado'
-        });
+      // Si tienes estado en "cajas", valida:
+      if (caja.estado && caja.estado.toLowerCase() !== 'disponible' && caja.estado.toLowerCase() !== 'libre') {
+        throw new Error(`Caja ${codigo} en estado ${caja.estado}`);
       }
-    }
 
-    // Preparar campos para actualizar
-    let updateFields = [];
-    let updateValues = [];
+      // Insert en ventas_cajas (detalle)
+      await conn.query(
+        `INSERT INTO ventas_cajas
+          (venta_id, caja_id, benefactor_id, punto_venta_id, forma_pago, estado, monto, moneda, fecha)
+          VALUES (?,?,?,?,?,?,?,?,?)`,
+        [
+          ventaId,
+          caja.caja_id,
+          benefactorId,
+          punto_venta_id || null,
+          forma_pago || null,
+          estado || 'Entregada a Benefactor',
+          Number(monto || 0),     // si prefieres monto unitario por caja, cámbialo aquí
+          moneda || 'PEN',
+          fecha
+        ]
+      );
 
-    if (nombre) {
-      updateFields.push('nombre = ?');
-      updateValues.push(nombre.trim());
-    }
-    if (dni) {
-      updateFields.push('dni = ?');
-      updateValues.push(dni.trim());
-    }
-    if (telefono !== undefined) {
-      updateFields.push('telefono = ?');
-      updateValues.push(telefono?.trim() || null);
-    }
-    if (email !== undefined) {
-      updateFields.push('email = ?');
-      updateValues.push(email?.trim() || null);
-    }
-    if (direccion !== undefined) {
-      updateFields.push('direccion = ?');
-      updateValues.push(direccion?.trim() || null);
-    }
-    if (observaciones !== undefined) {
-      updateFields.push('observaciones = ?');
-      updateValues.push(observaciones?.trim() || null);
-    }
-    if (activo !== undefined) {
-      updateFields.push('activo = ?');
-      updateValues.push(activo);
-    }
-
-    if (updateFields.length > 0) {
-      updateValues.push(id);
-      await pool.execute(
-        `UPDATE benefactores SET ${updateFields.join(', ')} WHERE id = ?`,
-        updateValues
+      // Marca la caja como asignada
+      await conn.query(
+        `UPDATE cajas
+            SET estado = 'asignada',
+                benefactor_id = ?
+          WHERE id = ?`,
+        [benefactorId, caja.caja_id]
       );
     }
 
-    res.json({
-      success: true,
-      message: 'Benefactor actualizado exitosamente'
-    });
-
-  } catch (error) {
-    console.error('Error al actualizar benefactor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
+    await conn.commit();
+    return res.json({ success: true, data: { id: ventaId }, message: 'Venta registrada' });
+  } catch (e) {
+    await conn.rollback();
+    console.error('POST /ventas', e);
+    const msg = e.message?.includes('Duplicate entry') ? 'Recibo ya registrado' : (e.message || 'Error registrando venta');
+    return res.status(500).json({ success: false, error: msg });
+  } finally {
+    conn.release();
   }
 });
 
-// Cambiar estado de benefactor (activar/desactivar)
-router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
+/**
+ * GET /api/ventas/:id
+ * Devuelve cabecera + detalle (ventas_cajas).
+ */
+router.get('/:id', authenticateToken, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ success: false, error: 'ID inválido' });
+  const conn = await pool.getConnection();
   try {
-    const { id } = req.params;
+    const [[cab]] = await conn.query(
+      `SELECT v.*, b.nombre AS benefactor_nombre, b.dni, b.telefono, b.email
+          FROM ventas v
+          INNER JOIN benefactores b ON b.id = v.benefactor_id
+        WHERE v.id = ?`,
+      [id]
+    );
+    if (!cab) return res.status(404).json({ success: false, error: 'Venta no encontrada' });
 
-    // Obtener estado actual
-    const [benefactorRows] = await pool.execute(
-      'SELECT activo FROM benefactores WHERE id = ?',
+    const [det] = await conn.query(
+      `SELECT
+          d.*, c.codigo AS caja_codigo,
+          f.codigo_unico AS familia_codigo, f.nombre_padre, f.nombre_madre, f.direccion,
+          z.nombre AS zona_nombre, z.abreviatura AS zona_abreviatura
+          FROM ventas_cajas d
+          INNER JOIN cajas c     ON c.id = d.caja_id
+          LEFT  JOIN familias f  ON f.id = c.familia_id
+          LEFT  JOIN zonas z     ON z.id = f.zona_id
+        WHERE d.venta_id = ?
+        ORDER BY d.id`,
       [id]
     );
 
-    if (benefactorRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Benefactor no encontrado'
-      });
-    }
-
-    const nuevoEstado = !benefactorRows[0].activo;
-
-    // Si se está desactivando, verificar que no tenga cajas asignadas
-    if (!nuevoEstado) {
-      const [cajasAsignadas] = await pool.execute(
-        'SELECT COUNT(*) as total FROM cajas WHERE benefactor_id = ? AND estado IN ("asignada", "entregada")',
-        [id]
-      );
-
-      if (cajasAsignadas[0].total > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'No se puede desactivar el benefactor porque tiene cajas asignadas o entregadas'
-        });
-      }
-    }
-
-    // Actualizar estado
-    await pool.execute(
-      'UPDATE benefactores SET activo = ? WHERE id = ?',
-      [nuevoEstado, id]
-    );
-
-    res.json({
-      success: true,
-      message: `Benefactor ${nuevoEstado ? 'activado' : 'desactivado'} exitosamente`
-    });
-
-  } catch (error) {
-    console.error('Error al cambiar estado:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
-// Eliminar benefactor
-router.delete('/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Verificar si el benefactor existe
-    const [existingBenefactor] = await pool.execute(
-      'SELECT id FROM benefactores WHERE id = ?',
-      [id]
-    );
-
-    if (existingBenefactor.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Benefactor no encontrado'
-      });
-    }
-
-    // Verificar si tiene cajas asociadas
-    const [cajasAsociadas] = await pool.execute(
-      'SELECT COUNT(*) as total FROM cajas WHERE benefactor_id = ?',
-      [id]
-    );
-
-    if (cajasAsociadas[0].total > 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede eliminar el benefactor porque tiene cajas asociadas'
-      });
-    }
-
-    // Eliminar benefactor
-    await pool.execute(
-      'DELETE FROM benefactores WHERE id = ?',
-      [id]
-    );
-
-    res.json({
-      success: true,
-      message: 'Benefactor eliminado exitosamente'
-    });
-
-  } catch (error) {
-    console.error('Error al eliminar benefactor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
-// Obtener cajas asignadas a un benefactor
-router.get('/:id/cajas', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const [rows] = await pool.execute(`
-      SELECT 
-        c.*,
-        f.codigo_unico as familia_codigo,
-        f.nombre_padre,
-        f.nombre_madre,
-        f.direccion as familia_direccion,
-        z.nombre as zona_nombre,
-        z.abreviatura as zona_abreviatura
-      FROM cajas c
-      INNER JOIN familias f ON c.familia_id = f.id
-      INNER JOIN zonas z ON f.zona_id = z.id
-      WHERE c.benefactor_id = ?
-      ORDER BY c.created_at DESC
-    `, [id]);
-
-    res.json({
-      success: true,
-      data: rows
-    });
-  } catch (error) {
-    console.error('Error al obtener cajas del benefactor:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
+    return res.json({ success: true, data: { cabecera: cab, detalle: det } });
+  } catch (e) {
+    console.error('GET /ventas/:id', e);
+    return res.status(500).json({ success: false, error: 'Error obteniendo venta' });
+  } finally {
+    conn.release();
   }
 });
 
 module.exports = router;
-
