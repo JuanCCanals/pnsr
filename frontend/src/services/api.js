@@ -89,16 +89,16 @@ export const familiasService = {
 };
 
 // Servicio de Ventas
-export const ventasService = {
-  // Busca una caja por código único
-  buscarCaja: (codigo) =>
-    api.get(`/ventas/box/${codigo}`)
-       .then(res => res.data),
 
-  // Registra la venta (asigna la caja)
-  registrar: (payload) =>
-    api.post('/ventas', payload)
-       .then(res => res.data),
+// en frontend/src/services/api.js
+export const ventasService = {
+  buscarCaja: (codigo) => api.get(`/benefactores/box/${encodeURIComponent(codigo)}`).then(r => r.data),
+  registrar:  (payload) => api.post('/benefactores', payload).then(r => r.data),
+};
+
+export const catalogosService = {
+  getModalidades: () => api.get('/catalogos/modalidades').then(r => r.data),
+  getPuntosVenta: () => api.get('/catalogos/puntos-venta').then(r => r.data),
 };
 
 export const serviciosService = {

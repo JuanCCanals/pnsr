@@ -1,16 +1,14 @@
-// backend/routes/ventas.js
+// /backend/routes/ventas.js
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 
-// Helper: busca caja por cajas.codigo O familias.codigo_unico
-// Acepta una conexión de transacción (conn) o usa pool si no se pasa.
+// Utilidad: obtener caja por c.codigo o por f.codigo_unico
 async function getCajaByCodigo(connOrCodigo, maybeCodigo) {
   let conn = pool;
   let codigo = maybeCodigo;
 
-  // Permite llamada como getCajaByCodigo(conn, codigo) o getCajaByCodigo(codigo)
   if (typeof connOrCodigo === 'string') {
     codigo = connOrCodigo;
   } else if (connOrCodigo && typeof connOrCodigo.query === 'function') {
@@ -36,7 +34,45 @@ async function getCajaByCodigo(connOrCodigo, maybeCodigo) {
   return rows[0];
 }
 
-// GET /api/ventas/box/:codigo  → validar código antes de agregar a la tabla del popup
+// 🔎 Nueva utilidad: resolver una lista de códigos contra cajas.codigo O familias.codigo_unico
+async function resolveCajasByCodigos(conn, codigos) {
+  if (!Array.isArray(codigos) || codigos.length === 0) {
+    return { resolved: [], missing: [] };
+  }
+
+  const placeholders = codigos.map(() => '?').join(',');
+  const sql = `
+    SELECT 
+      c.id,
+      c.codigo,
+      c.estado,
+      f.codigo_unico
+    FROM familias f
+    LEFT JOIN cajas c ON c.familia_id = f.id
+    WHERE 
+      c.codigo IN (${placeholders})
+      OR f.codigo_unico IN (${placeholders})
+  `;
+  const [rows] = await conn.query(sql, [...codigos, ...codigos]);
+
+  // Mapeo por ambos identificadores para respetar el orden original de "codigos"
+  const map = new Map();
+  for (const r of rows) {
+    if (r.codigo) map.set(String(r.codigo), r);
+    if (r.codigo_unico) map.set(String(r.codigo_unico), r);
+  }
+
+  const resolved = [];
+  const missing = [];
+  for (const code of codigos) {
+    const r = map.get(String(code));
+    if (r && r.id) resolved.push(r);
+    else missing.push(code);
+  }
+  return { resolved, missing };
+}
+
+// GET /api/ventas/box/:codigo
 router.get('/box/:codigo', authenticateToken, async (req, res) => {
   try {
     const codigo = decodeURIComponent(req.params.codigo || '').trim();
@@ -45,11 +81,10 @@ router.get('/box/:codigo', authenticateToken, async (req, res) => {
     const caja = await getCajaByCodigo(codigo);
     if (!caja) return res.json({ success: false, error: 'No existe la caja' });
 
-    // Si manejas estado en 'cajas', valida disponibilidad:
-    if (caja.caja_estado && !['disponible', 'libre', null, ''].includes(String(caja.caja_estado).toLowerCase())) {
+    const estado = String(caja.caja_estado || '').toLowerCase();
+    if (estado && !['disponible', 'libre', ''].includes(estado)) {
       return res.json({ success: false, error: `Caja en estado: ${caja.caja_estado}` });
     }
-
     res.json({ success: true, data: caja });
   } catch (e) {
     console.error('GET /ventas/box/:codigo', e);
@@ -57,7 +92,7 @@ router.get('/box/:codigo', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/ventas  → cabecera (ventas) + detalle (ventas_detalle) + marcar cajas
+// POST /api/ventas  → cabecera (ventas) + detalle (ventas_cajas) + actualizar cajas
 router.post('/', authenticateToken, async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -66,53 +101,59 @@ router.post('/', authenticateToken, async (req, res) => {
       forma_pago, estado = 'Entregada a Benefactor',
       monto, moneda = 'PEN',
       benefactor,  // { id?, nombres, apellidos, telefono, correo }
-      codigos      // array de alfanuméricos (caja.codigo o familia.codigo_unico)
+      codigos      // array de códigos (pueden ser cajas.codigo o familias.codigo_unico)
     } = req.body || {};
 
     if (!recibo?.trim() || !fecha || !benefactor || !Array.isArray(codigos) || codigos.length === 0) {
       return res.status(400).json({ success: false, error: 'Recibo, fecha, benefactor y al menos 1 código son requeridos' });
     }
 
-    // monto vendrá de la modalidad seleccionada; si no llega, default 0
     const montoTotal = Number(monto || 0);
 
     await conn.beginTransaction();
 
-    // Recibo único
+    // Unicidad de recibo
     const [dup] = await conn.query('SELECT id FROM ventas WHERE recibo = ? LIMIT 1', [recibo.trim()]);
     if (dup.length) {
       await conn.rollback();
       return res.status(400).json({ success: false, error: 'Recibo ya registrado' });
     }
 
-    // Upsert benefactor (usando tu esquema actual de “nombres/apellidos/telefono/correo”)
+    // Upsert benefactor → usar COLUMNA nombre (no "nombres")
     let benefactorId = benefactor.id || null;
+    const nombreCompuesto = [benefactor.nombres?.trim(), benefactor.apellidos?.trim()]
+      .filter(Boolean).join(' ').trim() || 'SIN NOMBRE';
+    const telefono  = benefactor.telefono?.trim() || null;
+    const email     = benefactor.correo?.trim()   || null;
+    const direccion = null; // si luego lo capturas
+
     if (!benefactorId) {
-      const [ins] = await conn.query(
-        `INSERT INTO benefactores (nombres, apellidos, telefono, correo, activo)
-          VALUES (?,?,?,?,1)`,
-        [
-          benefactor.nombres?.trim() || 'SIN NOMBRE',
-          benefactor.apellidos?.trim() || null,
-          benefactor.telefono?.trim()  || null,
-          benefactor.correo?.trim()    || null
-        ]
+      // Buscar si existe por (nombre + telefono)
+      const [bf] = await conn.query(
+        'SELECT id FROM benefactores WHERE nombre = ? AND IFNULL(telefono,"") = IFNULL(?, "") LIMIT 1',
+        [nombreCompuesto, telefono]
       );
-      benefactorId = ins.insertId;
+      if (bf.length) {
+        benefactorId = bf[0].id;
+        await conn.query(
+          'UPDATE benefactores SET telefono=?, email=?, direccion=? WHERE id=?',
+          [telefono, email, direccion, benefactorId]
+        );
+      } else {
+        const [ins] = await conn.query(
+          'INSERT INTO benefactores (nombre, telefono, email, direccion) VALUES (?,?,?,?)',
+          [nombreCompuesto, telefono, email, direccion]
+        );
+        benefactorId = ins.insertId;
+      }
     } else {
       await conn.query(
-        `UPDATE benefactores SET nombres=?, apellidos=?, telefono=?, correo=? WHERE id=?`,
-        [
-          benefactor.nombres?.trim() || 'SIN NOMBRE',
-          benefactor.apellidos?.trim() || null,
-          benefactor.telefono?.trim()  || null,
-          benefactor.correo?.trim()    || null,
-          Number(benefactorId)
-        ]
+        'UPDATE benefactores SET nombre=?, telefono=?, email=?, direccion=? WHERE id=?',
+        [nombreCompuesto, telefono, email, direccion, Number(benefactorId)]
       );
     }
 
-    // Cabecera: ventas
+    // Cabecera de venta
     const [vIns] = await conn.query(
       `INSERT INTO ventas 
         (recibo, fecha, modalidad_id, punto_venta_id, forma_pago, estado, monto, moneda, benefactor_id)
@@ -131,40 +172,51 @@ router.post('/', authenticateToken, async (req, res) => {
     );
     const ventaId = vIns.insertId;
 
-    // Detalle: por cada código, validar y registrar
-    for (const raw of codigos) {
-      const codigo = String(raw || '').trim();
-      if (!codigo) continue;
+    // ✅ Validar/Resolver todas las cajas a partir de codigos[] (caja.codigo o familia.codigo_unico)
+    const { resolved: cajasResueltas, missing: faltantes } = await resolveCajasByCodigos(conn, codigos);
+    if (faltantes.length) throw new Error(`Códigos no encontrados: ${faltantes.join(', ')}`);
 
-      const caja = await getCajaByCodigo(conn, codigo);
-      if (!caja) throw new Error(`Caja ${codigo} no existe`);
+    // Disponibilidad: permitimos 'disponible' o 'libre' o vacío
+    const noDisponibles = cajasResueltas
+      .filter(c => {
+        const e = String(c.estado || '').toLowerCase();
+        return e && !['disponible', 'libre', ''].includes(e);
+      })
+      .map(c => c.codigo || c.codigo_unico);
 
-      if (caja.caja_estado && !['disponible', 'libre', null, ''].includes(String(caja.caja_estado).toLowerCase())) {
-        throw new Error(`Caja ${codigo} en estado ${caja.caja_estado}`);
-      }
+    if (noDisponibles.length) throw new Error(`Cajas no disponibles: ${noDisponibles.join(', ')}`);
 
-      // ventas_detalle (si usas ventas_cajas, cambia el nombre de la tabla y columnas aquí)
+    // Detalle en ventas_cajas + actualizar cajas (una fila por caja resuelta)
+    for (const c of cajasResueltas) {
       await conn.query(
-        `INSERT INTO ventas_detalle (venta_id, caja_id, codigo, familia_id, zona_id, punto_venta_id, modalidad_id, monto, moneda, fecha)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO ventas_cajas
+          (caja_id, benefactor_id, modalidad_id, punto_venta_id, usuario_id, monto, moneda, fecha, estado_pago)
+          VALUES (?,?,?,?,?,?,?,?,?)`,
         [
-          ventaId,
-          caja.caja_id,
-          caja.caja_codigo || caja.familia_codigo,
-          caja.familia_id || null,
-          caja.zona_id || null,
-          punto_venta_id || null,
+          c.id,
+          benefactorId,
           modalidad_id || null,
-          montoTotal, // si deseas monto unitario por caja, cámbialo según tu regla
+          punto_venta_id || null,
+          req.user?.id || 1,
+          montoTotal, // Si luego usas precio unitario por modalidad, ajusta aquí
           moneda,
-          fecha
+          fecha,
+          'PAGADO'
         ]
       );
 
-      // marcar la caja
       await conn.query(
-        `UPDATE cajas SET estado='asignada', benefactor_id=? WHERE id=?`,
-        [benefactorId, caja.caja_id]
+        `UPDATE cajas
+          SET benefactor_id=?, modalidad_id=?, punto_venta_id=?, estado=?
+          WHERE id=?`,
+        [
+          benefactorId,
+          modalidad_id || null,
+          punto_venta_id || null,
+          (estado === 'Entregada a Benefactor') ? 'entregada' :
+          (estado === 'Asignada' ? 'asignada' : 'devuelta'),
+          c.id
+        ]
       );
     }
 

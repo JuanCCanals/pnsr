@@ -10,7 +10,7 @@ require('dotenv').config();
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const benefactoresRoutes = require('../routes/benefactores');
+// const benefactoresRoutes = require('../routes/benefactores');
 const ventasRoutes = require('../routes/ventas');
 const catalogosRoutes = require('../routes/catalogos');
 
@@ -49,8 +49,8 @@ app.use((req, res, next) => {
   return authenticateToken(req, res, next); // Aplicar en el resto
 });
 
-app.use('/api/benefactores', benefactoresRoutes);
-app.use('/api/ventas', ventasRoutes);
+app.use('/api/benefactores', ventasRoutes); // alias “amistoso” para el cliente
+app.use('/api/ventas', ventasRoutes);       // alias técnico (opcional, útil si ya lo usabas)
 app.use('/api/catalogos', catalogosRoutes);
 // ==========================================
 

@@ -148,8 +148,8 @@ router.get('/', authenticateToken, async (req, res) => {
       LEFT JOIN cajas c ON f.id = c.familia_id
       ${whereClause}
       GROUP BY f.id, f.codigo_unico, f.nombre_padre, f.nombre_madre, f.direccion, 
-               f.zona_id, f.telefono, f.observaciones, f.activo, f.created_at, f.updated_at,
-               z.nombre, z.abreviatura
+              f.zona_id, f.telefono, f.observaciones, f.activo, f.created_at, f.updated_at,
+              z.nombre, z.abreviatura
       ORDER BY f.codigo_unico
       LIMIT ? OFFSET ?
     `, [...queryParams, parseInt(limit), parseInt(offset)]);

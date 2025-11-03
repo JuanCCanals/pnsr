@@ -7,6 +7,101 @@ import Code128 from "../components/labels/Code128.jsx"; // <-- ajusta la ruta si
 import BarcodeDataUrl from "../components/labels/BarcodeDataUrl.jsx";
 import JsBarcode from "jsbarcode";
 
+
+// === Helpers de edad (meses) ===
+const _norm = (s) =>
+  (s ?? "")
+    .toString()
+    .trim()
+    .toUpperCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
+
+const _isAgeText = (s) => {
+  const t = _norm(s);
+  if (!t) return false;
+  if (/(^| )RN($| )|RECIEN NACID/.test(t)) return true;
+  if (/\b\d+\s*A(N|Ñ)O(S)?(\s+\d+\s+MES(ES)?)?\b/.test(t)) return true;
+  if (/\b\d+\s+MES(ES)?\b/.test(t)) return true;
+  if (/\b\d+\s+DIA(S)?\b/.test(t)) return true;
+  return false;
+};
+
+const _monthsFromDate = (fecha) => {
+  if (!fecha) return null;
+  const d = new Date(fecha);
+  if (isNaN(d)) return null;
+  const now = new Date();
+  let months = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+  // Ajuste por día del mes
+  if (now.getDate() < d.getDate()) months -= 1;
+  return months < 0 ? 0 : months;
+};
+
+// ¿Obs habla de meses o RN?
+const _isMesesOrRN = (s) => {
+  const t = _norm(s);
+  if (!t) return false;
+  if (/(^| )RN($| )|RECIEN NACID/.test(t)) return true;
+  if (/\b\d+\s*MES(ES)?\b/.test(t)) return true;
+  if (/\b\d+\s*DIA(S)?\b/.test(t)) return true; // lo tratamos como 0 meses
+  return false;
+};
+
+// Meses solo desde texto de meses/RN
+const _monthsFromText = (s) => {
+  const t = _norm(s);
+  if (!t) return null;
+  if (/(^| )RN($| )|RECIEN NACID/.test(t)) return 0;
+  const m = t.match(/(\d+)\s*MES(ES)?/);
+  const d = t.match(/(\d+)\s*DIA(S)?/);
+  if (m) return Math.max(0, parseInt(m[1], 10) || 0);
+  if (d) return 0; // “X días” => 0m
+  return null;
+};
+
+// Años desde fecha
+const _yearsFromDate = (fecha) => {
+  if (!fecha) return null;
+  const d = new Date(fecha);
+  if (isNaN(d)) return null;
+  const hoy = new Date();
+  let e = hoy.getFullYear() - d.getFullYear();
+  const m = hoy.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
+  return e < 0 ? 0 : e;
+};
+
+/** Devuelve string para la etiqueta:
+ * - "Xm" si no hay fecha y obs = nMESES/RN
+ * - "Y" (años) si hay fecha
+ * - "" en cualquier otro caso
+ */
+const getEdadParaEtiqueta = (fecha_nacimiento, observaciones) => {
+  const years = _yearsFromDate(fecha_nacimiento);
+  if (years !== null) return String(years);           // usar AÑOS si hay fecha
+
+  if (_isMesesOrRN(observaciones)) {
+    const mm = _monthsFromText(observaciones);
+    if (mm !== null) return `${mm} m`;                // MESES solo si no hay fecha
+  }
+  return "";
+};
+
+/** Devuelve meses (int) o null si no se puede calcular */
+const getEdadEnMeses = (fecha_nacimiento, observaciones) => {
+  // Prioriza texto si lo hay
+  if (_isAgeText(observaciones)) {
+    const mm = _monthsFromText(observaciones);
+    if (mm !== null) return mm;
+  }
+  // Si no hay texto válido, intenta por fecha_nacimiento
+  const byDate = _monthsFromDate(fecha_nacimiento);
+  return byDate;
+};
+
+
 // Subcomponente estable (fuera de Label80)
 function TablaIntegrantes({ data, maxRowsPerCol = 5 }) {
   const fill = Math.max(0, maxRowsPerCol - data.length);
@@ -53,31 +148,39 @@ function TablaIntegrantes({ data, maxRowsPerCol = 5 }) {
 const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref) {
   if (!familia) return null;
 
-  const calcEdad = (fn) => {
-    if (!fn) return "";
-    const d = new Date(fn);
-    if (isNaN(d)) return "";
-    const hoy = new Date();
-    let e = hoy.getFullYear() - d.getFullYear();
-    const m = hoy.getMonth() - d.getMonth();
-    if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
-    return e < 0 ? "" : e;
-  };
+  // const calcEdad = (fn) => {
+  //   if (!fn) return "";
+  //   const d = new Date(fn);
+  //   if (isNaN(d)) return "";
+  //   const hoy = new Date();
+  //   let e = hoy.getFullYear() - d.getFullYear();
+  //   const m = hoy.getMonth() - d.getMonth();
+  //   if (m < 0 || (m === 0 && hoy.getDate() < d.getDate())) e--;
+  //   return e < 0 ? "" : e;
+  // };
 
   // --- Marcadores de observaciones (¹ ² ³ …) por integrante ---
   // Filtra textos que sean "NINGUNA"/"NINGUNO" (con o sin punto/guiones/espacios)
-  const isNone = (s) => /^\s*ningun[oa][\.\-–—]*\s*$/i.test(s || "");
+  const isNone = (s) => {
+    const raw = s || "";
+    if (/^\s*ningun[oa][\.\-–—]*\s*$/i.test(raw)) return true;
+    return _isMesesOrRN(raw); // ← solo meses/RN se consideran “no observación” (edad)
+  };
 
   const sup = ["¹","²","³","⁴","⁵","⁶","⁷","⁸","⁹"];
   const obsItems = [];
   (integrantes || []).forEach((i) => {
-    const raw = (i.observaciones || "");
-    const txt = raw.trim();
-    if (!txt || isNone(txt)) return; // ← ignora "NINGUNA"
+    const raw = (i.observaciones || "").trim();
+    // ❌ Ignorar "NINGUNA" y también EDAD textual (nMESES / RN)
+    if (!raw) return;
+    if (/^\s*ningun[oa][\.\-–—]*\s*$/i.test(raw)) return;
+    if (_isMesesOrRN(raw)) return;  // <- clave: no mostrar "5MESES", "RN" en Observaciones
+  
     const mark = sup[obsItems.length] || `[${obsItems.length + 1}]`;
-    obsItems.push({ mark, text: txt });
-    i.__obsMark = mark; // etiqueta para usar en RELACION
+    obsItems.push({ mark, text: raw });
+    i.__obsMark = mark; // sólo marcamos si SÍ es observación real
   });
+
   const obsRender = obsItems.length
     ? obsItems.map(o => `${o.mark} ${o.text}`).join("; ")
     : "";
@@ -89,16 +192,24 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
   const madreFull = [familia.nombre_madre, familia.apellidos_madre].filter(Boolean).join(" ");
 
   const obsConcat = [...new Set(
-    (integrantes || []).map(i => (i.observaciones || "").trim()).filter(Boolean)
+    (integrantes || [])
+      .map(i => (i.observaciones || "").trim())
+      .filter(t =>
+        t &&
+        !/^\s*ningun[oa][\.\-–—]*\s*$/i.test(t) &&
+        !_isMesesOrRN(t)           // <- clave: no “5MESES”, no “RN”
+      )
   )].join("; ");
 
+  // ← Aquí fijamos EDAD en MESES
   const filas = (integrantes || []).map((i) => {
     const baseRel = (i.relacion || "").toUpperCase();
     const mark = i.__obsMark ? i.__obsMark : "";
+    const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.observaciones);
     return {
       relacion: mark ? `${baseRel}${mark}` : baseRel,
       sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
-      edad: i.edad ?? calcEdad(i.fecha_nacimiento),
+      edad: edadStr, // ← “Y” si hay fecha; “Xm” si no hay fecha y obs=meses/RN; sino vacío
     };
   });
 
@@ -290,10 +401,10 @@ const Familias = () => {
     };
   
     const escapeHtml = (s) =>
-      String(s ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   
     // === Genera el HTML de todas las etiquetas ===
     const etiquetasHtml = labelsData.map(({ familia, integrantes }) => {
@@ -304,18 +415,26 @@ const Familias = () => {
       const madreFull = [familia?.nombre_madre, familia?.apellidos_madre].filter(Boolean).join(" ");
   
       // 4.b.1 Marcadores ¹ ² ³ … por integrante con observación
-      const isNone = (s) => /^\s*ningun[oa][\.\-–—]*\s*$/i.test(s || "");
+      const isNone = (s) => {
+        const raw = s || "";
+        if (/^\s*ningun[oa][\.\-–—]*\s*$/i.test(raw)) return true;
+        return _isMesesOrRN(raw); // ← solo meses/RN
+      };
 
       const sup = ["¹","²","³","⁴","⁵","⁶","⁷","⁸","⁹"];
+
       const obsPairs = [];
       (integrantes || []).forEach((i) => {
-        const raw = (i.observaciones || "");
-        const txt = raw.trim();
-        if (!txt || isNone(txt)) return; // ← ignora "NINGUNA"
+        const raw = (i.observaciones || "").trim();
+        if (!raw) return;
+        if (/^\s*ningun[oa][\.\-–—]*\s*$/i.test(raw)) return;
+        if (_isMesesOrRN(raw)) return;  // <- no meter edades a Observaciones
+      
         const mark = sup[obsPairs.length] || `[${obsPairs.length + 1}]`;
-        obsPairs.push({ mark, text: txt });
+        obsPairs.push({ mark, text: raw });
         i.__obsMark = mark;
       });
+      
       const obsRender = obsPairs.length
         ? obsPairs.map(o => `${o.mark} ${escapeHtml(o.text)}`).join("; ")
         : "";
@@ -324,10 +443,11 @@ const Familias = () => {
       const filas = (integrantes || []).map((i) => {
         const baseRel = (i.relacion || "").toUpperCase();
         const mark = i.__obsMark ? i.__obsMark : "";
+        const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.observaciones);
         return {
           relacion: mark ? `${baseRel}${mark}` : baseRel,
           sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
-          edad: i.edad ?? calcEdad(i.fecha_nacimiento),
+          edad: edadStr,
         };
       });
   
