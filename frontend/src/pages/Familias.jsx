@@ -6,7 +6,101 @@ import Code128 from "../components/labels/Code128.jsx"; // <-- ajusta la ruta si
 //import BarcodeImg from "../components/labels/BarcodeImg.jsx";
 import BarcodeDataUrl from "../components/labels/BarcodeDataUrl.jsx";
 import JsBarcode from "jsbarcode";
+import ExcelJS from "exceljs";
 
+// === Helpers de Familias (export + titular) ===
+function pickTitular(f) {
+  const p = (f?.nombre_padre || '').trim();
+  const m = (f?.nombre_madre || '').trim();
+  return p || m || '';
+}
+
+// Mapea fila → columnas del Excel
+function mapFamiliaRow(f) {
+  return {
+    Codigo: f.codigo_unico ?? f.codigo ?? "",
+    Zona: f.zona_nombre ?? f.zona ?? "",
+    Titular: pickTitular(f),
+    Integrantes: Number(f.total_integrantes ?? f.integrantes ?? 0),
+    Estado: f.estado_caja ?? f.estado ?? "",
+  };
+}
+
+// Genera y descarga un XLSX en el browser
+async function downloadExcel(filename, rows) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Familias");
+
+  // Definir columnas y anchos
+  ws.columns = [
+    { header: "Código", key: "Codigo", width: 16 },
+    { header: "Zona", key: "Zona", width: 24 },
+    { header: "Titular", key: "Titular", width: 28 },
+    { header: "Integrantes", key: "Integrantes", width: 14 },
+    { header: "Estado", key: "Estado", width: 14 },
+  ];
+
+  // Estilo de cabecera
+  const header = ws.getRow(1);
+  header.font = { bold: true };
+  header.alignment = { vertical: "middle", horizontal: "center" };
+  header.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } }; // gris claro
+    cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+  });
+
+  // Agregar filas
+  rows.forEach((r) => ws.addRow(r));
+
+  // Bordes finos al cuerpo
+  ws.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    row.eachCell((cell) => {
+      cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+    });
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
+
+function toCSV(rows) {
+  const head = ['Codigo','Zona','Titular','Integrantes','Estado'];
+  const body = rows.map(r => [
+    r.codigo_unico ?? r.codigo ?? '',
+    r.zona_nombre ?? r.zona ?? '',
+    pickTitular(r),
+    String(r.integrantes ?? r.total_integrantes ?? ''),
+    r.estado ?? ''
+  ]);
+  const all = [head, ...body];
+  return all.map(row =>
+    row.map(cell => {
+      const s = (cell ?? '').toString();
+      // scape comas, comillas y saltos
+      if (/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
+      return s;
+    }).join(',')
+  ).join('\n');
+}
+
+function downloadCSV(filename, csv) {
+  // BOM para que Excel reconozca UTF-8
+  const blob = new Blob(["\uFEFF"+csv], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+}
 
 // === Helpers de edad (meses) ===
 const _norm = (s) =>
@@ -690,6 +784,61 @@ const Familias = () => {
     }
   };
 
+
+  // Exporta TODO lo filtrado (sin paginar) desde el frontend
+  const handleExportXlsxAll = async () => {
+    try {
+      // intentamos con un límite grande
+      const baseParams = {
+        search: search || undefined,
+        zona_id: zonaId || undefined,
+        activo: activo || undefined,
+        sort_by: sortBy.field,
+        sort_dir: sortBy.dir,
+      };
+
+      let allRows = [];
+      let pageNum = 1;
+      const pageLimit = 100000; // tu preferencia
+
+      // 1) primer intento: una sola llamada grande
+      const r1 = await familiasService.getAll({ ...baseParams, page: 1, limit: pageLimit });
+      if (!r1?.success) {
+        alert(r1?.error || "No se pudo obtener datos para exportar.");
+        return;
+      }
+      allRows = r1.data || [];
+
+      // 2) si el backend impone paginación, recolectamos el resto en bloques de 1000
+      const pag = r1.pagination || {};
+      if (pag?.totalPages && pag.totalPages > 1) {
+        // recolecta por páginas pequeñas para no saturar
+        const chunkLimit = 1000;
+        allRows = [...allRows]; // ya tenemos la página 1
+        for (let p = 2; p <= pag.totalPages; p++) {
+          const rp = await familiasService.getAll({ ...baseParams, page: p, limit: chunkLimit });
+          if (rp?.success && Array.isArray(rp.data)) {
+            allRows.push(...rp.data);
+          } else {
+            break; // si falla alguna, salimos con lo ya reunido
+          }
+        }
+      }
+
+      if (!allRows.length) {
+        alert("No hay datos para exportar.");
+        return;
+      }
+
+      const rows = allRows.map(mapFamiliaRow);
+      await downloadExcel(`familias_filtrado_${new Date().toISOString().slice(0,10)}.xlsx`, rows);
+    } catch (e) {
+      console.error(e);
+      alert("No se pudo exportar el filtrado completo.");
+    }
+  };
+
+
   // ===== Tabla (ordenamiento) =====
   const onSort = (field) => {
     setSortBy((prev) => {
@@ -770,7 +919,6 @@ const Familias = () => {
       console.error(e);
     }
   };
-  
 
   const doPrint = () => window.print();
 
@@ -841,6 +989,14 @@ const Familias = () => {
             >
               Imprimir etiquetas por zona
             </button>
+
+            <button
+              className="px-3 py-2 rounded bg-emerald-600 text-white"
+              onClick={handleExportXlsxAll}
+            >
+              Exportar Excel
+            </button>
+
           </div>
         </div>
 
@@ -853,7 +1009,7 @@ const Familias = () => {
                 {[
                   ["codigo_unico", "Código"],
                   ["zona_nombre", "Zona"],
-                  ["direccion", "Dirección"],
+                  ["titular", "Titular"],
                   ["total_integrantes", "Integrantes"],
                   ["estado_caja", "Estado Caja"],
                 ].map(([f, label]) => (
@@ -876,7 +1032,7 @@ const Familias = () => {
                 <tr key={f.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                   <td className="px-5 py-3 whitespace-nowrap font-semibold">{f.codigo_unico}</td>
                   <td className="px-5 py-3 whitespace-nowrap">{f.zona_nombre}</td>
-                  <td className="px-5 py-3">{f.direccion}</td>
+                  <td className="px-5 py-3">{pickTitular(f)}</td>
                   <td className="px-5 py-3 whitespace-nowrap">{f.total_integrantes || 0}</td>
                   <td className="px-5 py-3 whitespace-nowrap">
                     <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
