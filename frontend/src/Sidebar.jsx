@@ -21,7 +21,7 @@ const Menus = [
   { title: 'Campañas', src: Folder, path: '/campanias', roles: ['admin', 'operador', 'consulta'] }, // sin perm
   { title: 'Modalidades', src: Folder, path: '/modalidades', roles: ['admin', 'operador', 'consulta'] }, // sin perm
   { title: 'PuntosVenta', src: Folder, path: '/puntosventa', roles: ['admin', 'operador', 'consulta'] }, // sin perm
-  { title: 'Benefactores', src: Folder, path: '/benefactores', roles: ['admin', 'operador', 'consulta'], perm: 'venta_cajas' },
+  { title: 'Gestión',       src: Folder, path: '/gestion',       roles: ['admin', 'operador', 'consulta'], perm: 'venta_cajas' },
   { title: 'Registrar Donaciones', src: Folder, path: '/donaciones', roles: ['admin', 'operador'], perm: 'ingresos' },
   { title: 'Servicios', src: Folder, path: '/servicios', roles: ['admin', 'operador'], perm: 'servicios' }, // crea el perm si lo usarás
   { title: 'Cobros', src: Calendar, path: '/cobros', roles: ['admin', 'operador'], perm: 'ingresos' },

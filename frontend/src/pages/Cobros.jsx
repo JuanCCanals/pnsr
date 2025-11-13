@@ -1,7 +1,75 @@
+// frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect } from 'react';
+import { cobrosService } from '../services/api'; // arriba con el resto de imports
 // import { useAuth } from '../contexts/AuthContext'; // Si no lo usas, déjalo comentado
 
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
+
+function printTicket80(cobro) {
+  const html = `
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ticket</title>
+<style>
+  @page { size: 80mm auto; margin: 4mm; }
+  * { font-family: Arial, sans-serif; }
+  .t { width: 100%; font-size: 11px; }
+  .hdr { text-align:center; font-weight:700; font-size:12px; margin-bottom:6px; }
+  .sep { border-top:1px solid #000; margin:6px 0; }
+  .row { display:flex; justify-content:space-between; }
+  .right { text-align:right; }
+  .mt4 { margin-top:4px; }
+</style>
+</head>
+<body>
+  <div class="t">
+    <div class="hdr">${(window.ENTIDAD_NOMBRE || 'Parroquia N.S. de la Reconciliación')}</div>
+    <div style="text-align:center">N° TICKET: ${cobro.numero_comprobante}</div>
+    <div style="text-align:center">
+      FECHA: ${new Date(cobro.fecha_cobro || Date.now()).toLocaleDateString('es-PE')}
+      &nbsp;&nbsp;HORA: ${new Date(cobro.fecha_cobro || Date.now()).toLocaleTimeString('es-PE')}
+    </div>
+    <div class="sep"></div>
+
+    ${cobro.cliente_nombre ? `<div><b>CLIENTE:</b> ${cobro.cliente_nombre}${cobro.cliente_dni ? ' (DNI ' + cobro.cliente_dni + ')' : ''}</div>` : ''}
+
+    <div class="mt4"><b>ITEM</b></div>
+    <div class="row"><div>${cobro.concepto || 'Servicio'}</div><div class="right">S/ ${(Number(cobro.monto)||0).toFixed(2)}</div></div>
+    <div class="sep"></div>
+    <div class="row"><div><b>TOTAL</b></div><div class="right"><b>S/ ${(Number(cobro.monto)||0).toFixed(2)}</b></div></div>
+    <div class="mt4">PAGO: ${cobro.metodo_pago || ''}</div>
+
+    <div class="sep"></div>
+    <div style="font-size:9px; text-align:center;">
+      ${'Documento sin efectos legales del sistema jurídico nacional (Canon 222 §1 CDC).'}
+    </div>
+  </div>
+  <script>window.onload = () => { window.print(); setTimeout(()=>window.close(), 300); };</script>
+</body>
+</html>`;
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+}
+
+
+// Crea o devuelve el cliente por nombre y opcional DNI
+async function ensureCliente(nombre, dni = '') {
+  const data = await cobrosService.ensureCliente(nombre, dni);
+  if (!data?.success) throw new Error(data?.error || 'No se pudo asegurar cliente');
+  return data.data.id; // cliente_id
+}
+
+
 
 async function httpGet(url) {
   const token = localStorage.getItem('token');
@@ -20,9 +88,9 @@ async function httpJSON(url, method, body) {
 }
 
 // Listado con filtros/paginación
-async function listarServicios({ search='', tipo_servicio='', estado_pago='', fecha_desde='', fecha_hasta='', page=1, limit=20 }) {
+async function listarServicios({ search='', tipo_servicio_id='', estado='', desde='', hasta='', page=1, limit=20 }) {
   const params = new URLSearchParams({
-    search, tipo_servicio, estado_pago, fecha_desde, fecha_hasta, page, limit
+    search, tipo_servicio_id, estado, desde, hasta, page, limit
   });
   return httpGet(`/api/servicios?${params.toString()}`);
 }
@@ -45,10 +113,35 @@ async function eliminarServicio(id) {
   return res.json();
 }
 
+// Construye el payload que espera el backend (mapea campos viejos → nuevos)
+function buildServicioPayload(formData, tiposServicio) {
+  const tipoId = Number(formData.tipo_servicio_id || formData.tipo_servicio || '');
+  const precio =
+    formData.precio === '' || formData.precio == null
+      ? (tiposServicio.find(t => String(t.value) === String(tipoId))?.precio_base ?? null)
+      : Number(formData.precio);
+
+  return {
+    tipo_servicio_id: tipoId,
+    cliente_id: Number(formData.cliente_id),   // 👈 viene resuelto por ensureCliente()
+    fecha_servicio: formData.fecha_servicio,
+    hora_servicio: formData.hora_servicio || null,
+    precio,
+    estado: formData.estado || 'programado',
+    observaciones: formData.observaciones || null,
+    forma_pago: formData.forma_pago || null,
+    fecha_operacion: formData.forma_pago && formData.forma_pago !== 'efectivo' ? (formData.fecha_operacion || null) : null,
+    hora_operacion: formData.forma_pago && formData.forma_pago !== 'efectivo' ? (formData.hora_operacion || null) : null,
+    nro_operacion: formData.forma_pago && formData.forma_pago !== 'efectivo' ? (formData.nro_operacion || null) : null,
+    obs_operacion: formData.forma_pago && formData.forma_pago !== 'efectivo' ? (formData.obs_operacion || null) : null
+  };
+}
+
+
+
 // Acciones: marcar pagado / cancelar
-async function marcarPagado(id, { forma_pago } = {}) {
-  // Si tu endpoint no usa body, no pasa nada; lo ignora.
-  return httpJSON(`/api/servicios/${id}/marcar-pagado`, 'POST', { forma_pago });
+async function marcarRealizado(id) {
+  return httpJSON(`/api/servicios/${id}/marcar-realizado`, 'POST', {});
 }
 
 async function cancelarServicio(id, { observaciones } = {}) {
@@ -68,17 +161,35 @@ async function getStatsServicios() {
 
 // Cobros (ticket 80mm) opcional desde esta pantalla
 async function cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado }) {
-  const resp = await httpJSON('/api/cobros', 'POST', {
+  const resp = await cobrosService.crear({
     servicio_id: servicio.id,
-    cliente_id: servicio.cliente_id,
-    concepto: conceptoPersonalizado || `Pago de ${servicio.tipo_servicio_nombre || servicio.tipo_servicio}`,
-    monto: Number(servicio.precio || servicio.monto_soles || 0),
+    cliente_id: servicio.cliente_id || 1,
+    concepto: conceptoPersonalizado || `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`,
+    monto: Number(servicio.precio || 0),
     metodo_pago_id
   });
-  if (!resp.success) throw new Error(resp.error || 'No se pudo registrar el cobro');
-  window.open(`/api/cobros/${resp.data.id}/ticket`, '_blank');
-  return resp;
+  if (!resp?.success) throw new Error(resp?.error || 'No se pudo registrar el cobro');
+  return resp; // resp.data.id = cobro_id
 }
+
+
+
+function resolveMetodoPagoId(formasPago, forma_pago) {
+  const found = formasPago.find(fp => fp.value === forma_pago && fp.id);
+  if (found?.id) return found.id;
+  // Ajusta a tus IDs reales en DB:
+  const MAP = { efectivo:1, yape:2, plin:3, transferencia:4, interbancario:5 };
+  return MAP[String(forma_pago).toLowerCase()] || 1;
+}
+
+// 
+async function abrirTicketCobroHtml(cobroId) {
+  const json = await cobrosService.getById(cobroId);
+  if (!json?.success) throw new Error(json?.error || 'No se pudo obtener el cobro');
+  printTicket80(json.data); // tu función que genera el iframe e imprime
+}
+
+
 
 // ========== COMPONENTE ==========
 
@@ -98,27 +209,30 @@ const Servicios = () => {
   const [fechaHasta, setFechaHasta] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, limit: 20, total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+
   const [formData, setFormData] = useState({
-    tipo_servicio: '',
+    tipo_servicio_id: '',   // ← ahora guardamos el ID del tipo
+    cliente_id: '',         // si no tienes selector aún, puedes dejarlo vacío y el payload pondrá 1
+    cliente_nombre: '',   // 👈 nuevo
+    cliente_dni: '',      // 👈 opcional
     fecha_servicio: '',
     hora_servicio: '',
-    nombre_solicitante: '',
-    telefono_solicitante: '',
-    email_solicitante: '',
-    descripcion: '',
-    monto_soles: '',
-    monto_dolares: '',
-    estado_pago: 'pendiente',
-    forma_pago: '',
-    observaciones: ''
+    precio: '',             // se autocompleta al elegir el tipo (precio_base)
+    estado: 'programado',   // programado | realizado | cancelado
+    forma_pago: '',         // efectivo | yape | plin | transferencia | interbancario
+    fecha_operacion: '',
+    hora_operacion: '',
+    nro_operacion: '',
+    obs_operacion: '',
+    observaciones: ''       // único campo de texto libre (quitamos descripcion)
   });
   const [errors, setErrors] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
 
-  const estadosPago = [
-    { value: 'pendiente', label: 'Pendiente', color: 'bg-yellow-100 text-yellow-800' },
-    { value: 'pagado', label: 'Pagado', color: 'bg-green-100 text-green-800' },
-    { value: 'cancelado', label: 'Cancelado', color: 'bg-red-100 text-red-800' }
+  const estadosServicios = [
+    { value: 'programado', label: 'Programado', color: 'bg-yellow-100 text-yellow-800' },
+    { value: 'realizado',  label: 'Realizado',  color: 'bg-green-100 text-green-800' },
+    { value: 'cancelado',  label: 'Cancelado',  color: 'bg-red-100 text-red-800' }
   ];
 
   // Cargar datos iniciales / con filtros
@@ -137,10 +251,10 @@ const Servicios = () => {
         page: currentPage,
         limit: 20,
         search: searchTerm || '',
-        tipo_servicio: selectedTipo || '',
-        estado_pago: selectedEstado || '',
-        fecha_desde: fechaDesde || '',
-        fecha_hasta: fechaHasta || ''
+        tipo_servicio_id: selectedTipo || '',
+        estado: selectedEstado || '',
+        desde: fechaDesde || '',
+        hasta: fechaHasta || ''
       };
       const resp = await listarServicios(params);
       if (resp.success) {
@@ -155,6 +269,12 @@ const Servicios = () => {
     } finally {
       setLoading(false);
     }
+  };
+  
+  const handleTipoChange = (id) => {
+    setFormData(f => ({ ...f, tipo_servicio_id: id }));
+    const t = tiposServicio.find(x => String(x.value) === String(id));
+    if (t) setFormData(f => ({ ...f, precio: t.precio_base ?? '' }));
   };
 
   const loadTiposServicio = async () => {
@@ -189,12 +309,27 @@ const Servicios = () => {
     setErrors({});
     setSuccessMessage('');
     try {
+      // construimos el payload que el backend sí entiende
+      // 0) Validación mínima
+      if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
+        return setErrors({ general: 'Ingrese el nombre del cliente.' });
+      }
+
+      // 0.1) Resolver cliente_id por nombre (y dni si lo tienes)
+      const clienteId = await ensureCliente(formData.cliente_nombre.trim(), (formData.cliente_dni || '').trim());
+
+      // 1) construir payload “servidos por backend”
+      const payload = buildServicioPayload({ ...formData, cliente_id: clienteId }, tiposServicio);
+
+      
+
       let resp;
       if (editingServicio) {
-        resp = await actualizarServicio(editingServicio.id, formData);
+        resp = await actualizarServicio(editingServicio.id, payload);
       } else {
-        resp = await crearServicio(formData);
+        resp = await crearServicio(payload);
       }
+
       if (resp.success) {
         setSuccessMessage(editingServicio ? 'Servicio actualizado exitosamente' : 'Servicio creado exitosamente');
         setShowModal(false);
@@ -216,42 +351,45 @@ const Servicios = () => {
     }
   };
 
+
   const handleEdit = (servicio) => {
     setEditingServicio(servicio);
     setFormData({
-      tipo_servicio: servicio.tipo_servicio || '',
-      fecha_servicio: servicio.fecha_servicio ? servicio.fecha_servicio.split('T')[0] : '',
+      tipo_servicio_id: servicio.tipo_servicio_id || '',
+      cliente_id: servicio.cliente_id || '',
+      cliente_nombre: servicio.cliente_nombre || '',
+      cliente_dni: servicio.cliente_dni || '',
+      fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0,10) : '',
       hora_servicio: servicio.hora_servicio || '',
-      nombre_solicitante: servicio.nombre_solicitante || '',
-      telefono_solicitante: servicio.telefono_solicitante || '',
-      email_solicitante: servicio.email_solicitante || '',
-      descripcion: servicio.descripcion || '',
-      monto_soles: servicio.monto_soles || '',
-      monto_dolares: servicio.monto_dolares || '',
-      estado_pago: servicio.estado_pago || 'pendiente',
+      precio: servicio.precio ?? '',
+      estado: servicio.estado || 'programado',
       forma_pago: servicio.forma_pago || '',
+      fecha_operacion: servicio.fecha_operacion || '',
+      hora_operacion: servicio.hora_operacion || '',
+      nro_operacion: servicio.nro_operacion || '',
+      obs_operacion: servicio.obs_operacion || '',
       observaciones: servicio.observaciones || ''
     });
     setShowModal(true);
   };
+  
 
-  const handleMarcarPagado = async (id) => {
-    const formaPago = prompt('Ingrese la forma de pago (efectivo, transferencia, yape, etc.):');
-    if (!formaPago) return;
+  const handleMarcarRealizado = async (id) => {
     try {
-      const resp = await marcarPagado(id, { forma_pago: formaPago });
+      const resp = await marcarRealizado(id);
       if (resp.success) {
-        setSuccessMessage(resp.message || 'Marcado como pagado');
+        setSuccessMessage(resp.message || 'Marcado como realizado');
         loadServicios();
         loadStats();
       } else {
         setErrors({ general: resp.message || resp.error || 'No se pudo marcar' });
       }
     } catch (error) {
-      console.error('Error al marcar como pagado:', error);
+      console.error('Error al marcar como realizado:', error);
       setErrors({ general: 'Error de conexión' });
     }
   };
+  
 
   const handleCancelar = async (id) => {
     const observaciones = prompt('Motivo de cancelación (opcional):') || '';
@@ -287,45 +425,78 @@ const Servicios = () => {
     }
   };
 
+  const handleImprimirTicket = async (servicio) => {
+    try {
+      if (!servicio.precio || Number(servicio.precio) <= 0) {
+        return setErrors({ general: 'El servicio no tiene precio válido para emitir ticket.' });
+      }
+      // Exigir forma de pago definida
+      const forma = servicio.forma_pago || formData.forma_pago || '';
+      if (!forma) {
+        return setErrors({ general: 'Seleccione la forma de pago antes de imprimir el ticket.' });
+      }
+  
+      const metodo_pago_id = resolveMetodoPagoId(formasPago, forma);
+  
+      // Concepto del ticket (línea)
+      const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
+  
+      await cobrarServicio({
+        servicio,
+        metodo_pago_id,
+        conceptoPersonalizado: concepto
+      });
+
+      const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
+      await abrirTicketCobroHtml(r.data.id, { tpl: 'familias', hideCliente: 1 });
+    } catch (e) {
+      console.error(e);
+      setErrors({ general: 'No se pudo generar el ticket.' });
+    }
+  };
+
   const resetForm = () => {
     setFormData({
-      tipo_servicio: '',
+      tipo_servicio_id: '',
+      cliente_id: '',
       fecha_servicio: '',
       hora_servicio: '',
-      nombre_solicitante: '',
-      telefono_solicitante: '',
-      email_solicitante: '',
-      descripcion: '',
-      monto_soles: '',
-      monto_dolares: '',
-      estado_pago: 'pendiente',
+      precio: '',
+      estado: 'programado',
       forma_pago: '',
+      fecha_operacion: '',
+      hora_operacion: '',
+      nro_operacion: '',
+      obs_operacion: '',
       observaciones: ''
     });
     setEditingServicio(null);
     setErrors({});
   };
+  
 
   const handleSearch = (e) => { setSearchTerm(e.target.value); setCurrentPage(1); };
+
+  // Para filtros de cabecera:
   const handleFilterChange = (type, value) => {
-    if (type === 'tipo') setSelectedTipo(value);
-    else if (type === 'estado') setSelectedEstado(value);
-    else if (type === 'fecha_desde') setFechaDesde(value);
-    else if (type === 'fecha_hasta') setFechaHasta(value);
+    if (type === 'tipo') setSelectedTipo(value);               // se usará como tipo_servicio_id
+    else if (type === 'estado') setSelectedEstado(value);      // programado|realizado|cancelado
+    else if (type === 'fecha_desde') setFechaDesde(value);     // desde
+    else if (type === 'fecha_hasta') setFechaHasta(value);     // hasta
     setCurrentPage(1);
   };
 
   const getEstadoStyle = (estado) => {
-    const e = estadosPago.find(x => x.value === estado);
+    const e = estadosServicios.find(x => x.value === estado);
     return e ? e.color : 'bg-gray-100 text-gray-800';
   };
   const getEstadoLabel = (estado) => {
-    const e = estadosPago.find(x => x.value === estado);
+    const e = estadosServicios.find(x => x.value === estado);
     return e ? e.label : estado;
   };
-  const getTipoLabel = (tipo) => {
-    const t = tiposServicio.find(x => x.value === tipo);
-    return t ? t.label : tipo;
+  const getTipoLabel = (tipoId) => {
+    const t = tiposServicio.find(x => String(x.value) === String(tipoId));
+    return t ? t.label : tipoId;
   };
 
   if (loading && servicios.length === 0) {
@@ -340,13 +511,13 @@ const Servicios = () => {
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Cobros</h1>
-        <p className="text-gray-600 dark:text-gray-400">Registra pagos de servicios e imprime el ticket 80 mm</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Registrar Servicios</h1>
+        <p className="text-gray-600 dark:text-gray-400">Registra servicios (Bautismo, Matrimonio, etc.) y su estado</p>
       </div>
 
+
       {/* Mensajes */}
- {/* Mensajes */}
- {successMessage && <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">{successMessage}</div>}
+      {successMessage && <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">{successMessage}</div>}
       {errors.general   && <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">{errors.general}</div>}
 
       {/* Estadísticas */}
@@ -356,16 +527,16 @@ const Servicios = () => {
           <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total || 0}</p>
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Servicios Pagados</h3>
-          <p className="text-2xl font-bold text-green-600">{stats.servicios_pagados || 0}</p>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Programados</h3>
+          <p className="text-2xl font-bold text-yellow-600">{stats.programados || 0}</p>
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ingresos Soles</h3>
-          <p className="text-2xl font-bold text-blue-600">S/ {stats.ingresos_soles || 0}</p>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Realizados</h3>
+          <p className="text-2xl font-bold text-green-600">{stats.realizados || 0}</p>
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ingresos Dólares</h3>
-          <p className="text-2xl font-bold text-purple-600">$ {stats.ingresos_dolares || 0}</p>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Ingresos (S/)</h3>
+          <p className="text-2xl font-bold text-blue-600">{Number(stats.ingresos || 0).toFixed(2)}</p>
         </div>
       </div>
 
@@ -395,7 +566,7 @@ const Servicios = () => {
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
           >
             <option value="">Todos los estados</option>
-            {estadosPago.map(estado => (
+            {estadosServicios.map(estado => (
               <option key={estado.value} value={estado.value}>{estado.label}</option>
             ))}
           </select>
@@ -430,91 +601,116 @@ const Servicios = () => {
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Comprobante</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Tipo / Fecha</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Solicitante</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Monto</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Cliente</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Precio (S/)</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Estado</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">Acciones</th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {servicios.map((servicio) => (
-                <tr key={servicio.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-white">
-                    {servicio.numero_comprobante}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">
-                        {getTipoLabel(servicio.tipo_servicio)}
-                      </div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
-                        {new Date(servicio.fecha_servicio).toLocaleDateString()}
-                        {servicio.hora_servicio && ` - ${servicio.hora_servicio}`}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">
-                        {servicio.nombre_solicitante}
-                      </div>
-                      {servicio.telefono_solicitante && (
-                        <div className="text-sm text-gray-500 dark:text-gray-400">
-                          {servicio.telefono_solicitante}
-                        </div>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
-                    <div>
-                      {servicio.monto_soles && <div>S/ {servicio.monto_soles}</div>}
-                      {servicio.monto_dolares && <div>$ {servicio.monto_dolares}</div>}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getEstadoStyle(servicio.estado_pago)}`}>
-                      {getEstadoLabel(servicio.estado_pago)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex justify-end space-x-2">
-                      <button
-                        onClick={() => handleEdit(servicio)}
-                        className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
-                      >
-                        Editar
-                      </button>
-                      {servicio.estado_pago === 'pendiente' && (
-                        <>
-                          <button
-                            onClick={() => handleMarcarPagado(servicio.id)}
-                            className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                          >
-                            Marcar Pagado
-                          </button>
-                          <button
-                            onClick={() => handleCancelar(servicio.id)}
-                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      )}
-                      {servicio.estado_pago !== 'pagado' && (
+            {servicios.map((servicio) => (
+              <tr key={servicio.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">
+                    {getTipoLabel(servicio.tipo_servicio_id)}
+                  </div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                    {new Date(servicio.fecha_servicio).toLocaleDateString()}
+                    {servicio.hora_servicio && ` - ${servicio.hora_servicio}`}
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                  {servicio.cliente_nombre || servicio.cliente_id}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                  {Number(servicio.precio || 0).toFixed(2)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getEstadoStyle(servicio.estado)}`}>
+                    {getEstadoLabel(servicio.estado)}
+                  </span>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <div className="flex justify-end space-x-2">
+                    <button
+                      onClick={() => handleEdit(servicio)}
+                      className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      Editar
+                    </button>
+
+                    {/* Imprimir ticket: permitido SIEMPRE */}
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!servicio.precio || Number(servicio.precio) <= 0)
+                            return setErrors({ general: 'Defina un precio válido antes de imprimir.' });
+
+                          // Tomamos forma de pago del registro o pedimos (prompt simple)
+                          let fp = servicio.forma_pago || formData.forma_pago || '';
+                          if (!fp) {
+                            fp = prompt('Forma de pago (efectivo, yape, plin, transferencia, interbancario):') || '';
+                            if (!fp) return;
+                          }
+                          const metodo_pago_id = resolveMetodoPagoId(formasPago, fp);
+                          const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
+
+                          // Registrar cobro y abrir ticket
+                          const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
+                          await abrirTicketCobroHtml(r.data.id, { tpl: 'familias', hideCliente: 1 });
+                        } catch (e) {
+                          console.error(e);
+                          setErrors({ general: 'No se pudo generar el ticket.' });
+                        }
+                      }}
+                      className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
+                      title="Imprimir ticket 80mm"
+                    >
+                      Imprimir ticket
+                    </button>
+
+                    {servicio.estado === 'programado' && (
+                      <>
                         <button
-                          onClick={() => handleDelete(servicio.id)}
+                          onClick={() => handleMarcarRealizado(servicio.id)}
+                          className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                        >
+                          Marcar realizado
+                        </button>
+                        <button
+                          onClick={() => handleCancelar(servicio.id)}
                           className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
                         >
-                          Eliminar
+                          Cancelar
                         </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+                      </>
+                    )}
+
+                    {/* Imprimir ticket: permitido cuando ya está realizado */}
+                    {servicio.estado === 'realizado' && (
+                      <button
+                        onClick={() => handleImprimirTicket(servicio)}
+                        className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
+                        title="Imprimir ticket 80mm"
+                      >
+                        Imprimir ticket
+                      </button>
+                    )}
+
+                    {servicio.estado !== 'realizado' && (
+                      <button
+                        onClick={() => handleDelete(servicio.id)}
+                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                      >
+                        Eliminar
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
           </table>
         </div>
 
@@ -577,193 +773,263 @@ const Servicios = () => {
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Tipo */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Tipo de Servicio *
-                    </label>
-                    <select
-                      value={formData.tipo_servicio}
-                      onChange={(e) => setFormData(prev => ({ ...prev, tipo_servicio: e.target.value }))}
-                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.tipo_servicio ? 'border-red-500' : 'border-gray-300'}`}
-                      required
-                    >
-                      <option value="">Seleccionar tipo</option>
-                      {tiposServicio.map(tipo => (
-                        <option key={tipo.value} value={tipo.value}>{tipo.label}</option>
-                      ))}
-                    </select>
-                    {errors.tipo_servicio && <p className="mt-1 text-sm text-red-600">{errors.tipo_servicio}</p>}
-                  </div>
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {/* Tipo */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Tipo de Servicio *
+      </label>
+      <select
+        value={formData.tipo_servicio_id}
+        onChange={(e) => handleTipoChange(e.target.value)}
+        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.tipo_servicio_id ? 'border-red-500' : 'border-gray-300'}`}
+        required
+      >
+        <option value="">Seleccionar tipo</option>
+        {tiposServicio.map(tipo => (
+          <option key={tipo.value} value={tipo.value}>{tipo.label}</option>
+        ))}
+      </select>
+      {errors.tipo_servicio_id && <p className="mt-1 text-sm text-red-600">{errors.tipo_servicio_id}</p>}
+    </div>
 
-                  {/* Fecha */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Fecha del Servicio *
-                    </label>
-                    <input
-                      type="date"
-                      value={formData.fecha_servicio}
-                      onChange={(e) => setFormData(prev => ({ ...prev, fecha_servicio: e.target.value }))}
-                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.fecha_servicio ? 'border-red-500' : 'border-gray-300'}`}
-                      required
-                    />
-                    {errors.fecha_servicio && <p className="mt-1 text-sm text-red-600">{errors.fecha_servicio}</p>}
-                  </div>
+    {/* Fecha */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Fecha del Servicio *
+      </label>
+      <input
+        type="date"
+        value={formData.fecha_servicio}
+        onChange={(e) => setFormData(prev => ({ ...prev, fecha_servicio: e.target.value }))}
+        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.fecha_servicio ? 'border-red-500' : 'border-gray-300'}`}
+        required
+      />
+      {errors.fecha_servicio && <p className="mt-1 text-sm text-red-600">{errors.fecha_servicio}</p>}
+    </div>
 
-                  {/* Hora */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Hora del Servicio
-                    </label>
-                    <input
-                      type="time"
-                      value={formData.hora_servicio}
-                      onChange={(e) => setFormData(prev => ({ ...prev, hora_servicio: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    />
-                  </div>
+    {/* Cliente (obligatorio) */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Cliente (nombre completo) *
+      </label>
+      <input
+        type="text"
+        value={formData.cliente_nombre}
+        onChange={(e) => setFormData(prev => ({ ...prev, cliente_nombre: e.target.value }))}
+        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.cliente_nombre ? 'border-red-500' : 'border-gray-300'}`}
+        placeholder="Nombre de la persona que contrata"
+        required
+      />
+    </div>
+    {/* DNI opcional */}
+    <div >
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DNI (opcional)</label>
+      <input
+        type="text"
+        value={formData.cliente_dni}
+        onChange={(e) => setFormData(prev => ({ ...prev, cliente_dni: e.target.value }))}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+        placeholder="DNI"
+      />
+    </div>
 
-                  {/* Solicitante */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Nombre del Solicitante *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.nombre_solicitante}
-                      onChange={(e) => setFormData(prev => ({ ...prev, nombre_solicitante: e.target.value }))}
-                      className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.nombre_solicitante ? 'border-red-500' : 'border-gray-300'}`}
-                      placeholder="Nombre completo"
-                      required
-                    />
-                    {errors.nombre_solicitante && <p className="mt-1 text-sm text-red-600">{errors.nombre_solicitante}</p>}
-                  </div>
 
-                  {/* Teléfono */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Teléfono</label>
-                    <input
-                      type="tel"
-                      value={formData.telefono_solicitante}
-                      onChange={(e) => setFormData(prev => ({ ...prev, telefono_solicitante: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                      placeholder="Número de teléfono"
-                    />
-                  </div>
+    {/* Hora */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Hora del Servicio
+      </label>
+      <input
+        type="time"
+        value={formData.hora_servicio}
+        onChange={(e) => setFormData(prev => ({ ...prev, hora_servicio: e.target.value }))}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+      />
+    </div>
 
-                  {/* Email */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
-                    <input
-                      type="email"
-                      value={formData.email_solicitante}
-                      onChange={(e) => setFormData(prev => ({ ...prev, email_solicitante: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                      placeholder="Correo electrónico"
-                    />
-                  </div>
+    {/* Precio (S/) */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Precio (S/)</label>
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={formData.precio}
+        onChange={(e) => setFormData(prev => ({ ...prev, precio: e.target.value }))}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+        placeholder="0.00"
+      />
+    </div>
 
-                  {/* Monto S/ */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Monto en Soles</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.monto_soles}
-                      onChange={(e) => setFormData(prev => ({ ...prev, monto_soles: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                      placeholder="0.00"
-                    />
-                  </div>
+    {/* Estado */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estado</label>
+      <select
+        value={formData.estado}
+        onChange={(e) => setFormData(prev => ({ ...prev, estado: e.target.value }))}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+      >
+        {estadosServicios.map(estado => (
+          <option key={estado.value} value={estado.value}>{estado.label}</option>
+        ))}
+      </select>
+    </div>
 
-                  {/* Monto $ */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Monto en Dólares</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.monto_dolares}
-                      onChange={(e) => setFormData(prev => ({ ...prev, monto_dolares: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
+    {/* Forma de Pago */}
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Forma de Pago</label>
+      <select
+        value={formData.forma_pago}
+        onChange={(e) => setFormData(prev => ({ ...prev, forma_pago: e.target.value }))}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+      >
+        <option value="">Seleccionar forma de pago</option>
+        {formasPago.map(forma => (
+          <option key={forma.value} value={forma.value}>{forma.label}</option>
+        ))}
+      </select>
+    </div>
 
-                {/* Descripción */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Descripción</label>
-                  <textarea
-                    value={formData.descripcion}
-                    onChange={(e) => setFormData(prev => ({ ...prev, descripcion: e.target.value }))}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="Descripción del servicio"
-                  />
-                </div>
+    {/* Campos de operación si ≠ efectivo */}
+    {formData.forma_pago && formData.forma_pago !== 'efectivo' && (
+      <>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha de operación</label>
+          <input
+            type="date"
+            value={formData.fecha_operacion || ''}
+            onChange={(e) => setFormData(prev => ({ ...prev, fecha_operacion: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hora de operación</label>
+          <input
+            type="time"
+            value={formData.hora_operacion || ''}
+            onChange={(e) => setFormData(prev => ({ ...prev, hora_operacion: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° de operación</label>
+          <input
+            type="text"
+            value={formData.nro_operacion || ''}
+            onChange={(e) => setFormData(prev => ({ ...prev, nro_operacion: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            placeholder="Código / referencia de la operación"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Obs. de la operación</label>
+          <textarea
+            rows={2}
+            value={formData.obs_operacion || ''}
+            onChange={(e) => setFormData(prev => ({ ...prev, obs_operacion: e.target.value }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            placeholder="Notas adicionales del pago"
+          />
+        </div>
+      </>
+    )}
+  </div>
 
-                {/* Estado de Pago y Forma de Pago */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estado de Pago</label>
-                    <select
-                      value={formData.estado_pago}
-                      onChange={(e) => setFormData(prev => ({ ...prev, estado_pago: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    >
-                      {estadosPago.map(estado => (
-                        <option key={estado.value} value={estado.value}>{estado.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Forma de Pago</label>
-                    <select
-                      value={formData.forma_pago}
-                      onChange={(e) => setFormData(prev => ({ ...prev, forma_pago: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    >
-                      <option value="">Seleccionar forma de pago</option>
-                      {formasPago.map(forma => (
-                        <option key={forma.value} value={forma.value}>{forma.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+  {/* Observaciones */}
+  <div>
+    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Observaciones</label>
+    <textarea
+      value={formData.observaciones}
+      onChange={(e) => setFormData(prev => ({ ...prev, observaciones: e.target.value }))}
+      rows={3}
+      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+      placeholder="Observaciones adicionales"
+    />
+  </div>
 
-                {/* Observaciones */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Observaciones</label>
-                  <textarea
-                    value={formData.observaciones}
-                    onChange={(e) => setFormData(prev => ({ ...prev, observaciones: e.target.value }))}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="Observaciones adicionales"
-                  />
-                </div>
+  {/* Botones */}
+  <div className="flex justify-end space-x-3 pt-4">
+    <button
+      type="button"
+      onClick={() => setShowModal(false)}
+      className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
+    >
+      Cancelar
+    </button>
+    <button
+      type="submit"
+      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+    >
+      {editingServicio ? 'Actualizar' : 'Crear'}
+    </button>
 
-                {/* Botones */}
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                  >
-                    {editingServicio ? 'Actualizar' : 'Crear'}
-                  </button>
-                </div>
-              </form>
+    <button
+      type="button"
+      onClick={async () => {
+        // Dispara el submit estándar, pero con “imprimir” luego de crear/actualizar
+        try {
+          // 1) Guardar/actualizar
+          if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
+            return setErrors({ general: 'Ingrese el nombre del cliente para imprimir.' });
+          }
+          const clienteId = await ensureCliente(formData.cliente_nombre.trim(), (formData.cliente_dni || '').trim());
+          const payload = buildServicioPayload({ ...formData, cliente_id: clienteId }, tiposServicio);
+          
+          const resp = editingServicio
+            ? await actualizarServicio(editingServicio.id, payload)
+            : await crearServicio(payload);
+
+          if (!resp.success) {
+            if (resp.errors) {
+              const errorObj = {}; resp.errors.forEach(e => errorObj[e.field] = e.message);
+              return setErrors(errorObj);
+            }
+            return setErrors({ general: resp.message || resp.error || 'No se pudo guardar' });
+          }
+
+          // 2) Obtener servicio id para cobrar
+          const servicioId = editingServicio ? editingServicio.id : resp.data.id;
+          const servicio = {
+            id: servicioId,
+            cliente_id: payload.cliente_id || 1,
+            precio: payload.precio,
+            tipo_servicio_id: payload.tipo_servicio_id
+          };
+
+          // Validaciones rápidas
+          if (!servicio.precio || Number(servicio.precio) <= 0)
+            return setErrors({ general: 'Defina un precio válido antes de imprimir.' });
+          if (!payload.forma_pago)
+            return setErrors({ general: 'Seleccione la forma de pago para imprimir el ticket.' });
+
+          // 3) Cobrar + abrir ticket
+          const metodo_pago_id = resolveMetodoPagoId(formasPago, payload.forma_pago);
+          const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
+          const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
+          await abrirTicketCobroHtml(r.data.id);
+
+          // 4) Cerrar y refrescar
+          setSuccessMessage(editingServicio ? 'Servicio actualizado e impreso' : 'Servicio creado e impreso');
+          setShowModal(false);
+          resetForm();
+          loadServicios();
+          loadStats();
+        } catch (err) {
+          console.error(err);
+          setErrors({ general: 'No se pudo crear/imprimir el ticket.' });
+        }
+      }}
+      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+    >
+      {editingServicio ? 'Actualizar + Ticket' : 'Crear + Ticket'}
+    </button>
+
+  </div>
+</form>
+
+
+
             </div>
           </div>
         </div>

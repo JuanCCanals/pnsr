@@ -88,12 +88,13 @@ export const familiasService = {
   addIntegrante:(id, d)=>api.post(`/familias/${id}/integrantes`, d).then(r=>r.data),
 };
 
-// Servicio de Ventas
-
-// en frontend/src/services/api.js
+// Servicio de Ventas (GESTIÓN)
 export const ventasService = {
-  buscarCaja: (codigo) => api.get(`/benefactores/box/${encodeURIComponent(codigo)}`).then(r => r.data),
-  registrar:  (payload) => api.post('/benefactores', payload).then(r => r.data),
+  getAll:     (params)          => api.get('/ventas', { params }).then(r => r.data),
+  exportAll:  (params)          => api.get('/ventas/export', { params }).then(r => r.data),
+  buscarCaja: (codigo)          => api.get(`/ventas/box/${encodeURIComponent(codigo)}`).then(r => r.data),
+  registrar:  (payload)         => api.post('/ventas', payload).then(r => r.data),
+  update:     (id, body)        => api.put(`/ventas/${id}`, body).then(r => r.data),
 };
 
 export const catalogosService = {
@@ -109,6 +110,27 @@ export const serviciosService = {
   delete: id   => api.delete(`/servicios/${id}`).then(res => res.data),
   getRENIEC: dni=> api.get(`/servicios/reniec/${dni}`).then(res => res.data),
 };
+
+// --- Cobros ---
+export const cobrosService = {
+  ensureCliente: (nombre, dni='') =>
+    api.post('/cobros/ensure-cliente', { nombre, dni }).then(r => r.data),
+
+  crear: (payload) =>
+    api.post('/cobros', payload).then(r => r.data),
+
+  getById: (id) =>
+    api.get(`/cobros/${id}`).then(r => r.data),
+
+  // Si quieres abrir el PDF del ticket (versión PDF),
+  // puedes construir la URL absoluta con baseURL:
+  openTicketPdf: (id, { tpl='familias', hideCliente=1 } = {}) => {
+    const base = API_BASE_URL.replace(/\/api$/, ''); // http://localhost:3001
+    const url = `${base}/api/cobros/${id}/ticket?tpl=${encodeURIComponent(tpl)}&hideCliente=${hideCliente}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  },
+};
+
 
 // --- familiasService: agrega estos helpers ---
 familiasService.getById = (id) =>

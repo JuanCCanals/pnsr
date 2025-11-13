@@ -740,11 +740,6 @@ const Familias = () => {
     setTimeout(() => document.body.removeChild(iframe), 500);
   };
   
-  
-  
-  
-  
-  
 
   // load zonas + primer fetch
   useEffect(() => {

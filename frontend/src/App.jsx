@@ -78,7 +78,7 @@ function App() {
                 }
               />
               <Route
-                path="benefactores"
+                path="gestion"
                 element={
                   <ProtectedRoute requiredPerm="venta_cajas">
                     <Ventas />

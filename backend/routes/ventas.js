@@ -17,29 +17,28 @@ async function getCajaByCodigo(connOrCodigo, maybeCodigo) {
 
   const [rows] = await conn.query(
     `SELECT 
-        c.id            AS caja_id,
-        c.codigo        AS caja_codigo,
-        c.estado        AS caja_estado,
-        c.benefactor_id AS caja_benefactor_id,
-        c.familia_id    AS familia_id,
-        f.zona_id       AS zona_id,
-        f.codigo_unico  AS familia_codigo,
-        f.nombre_padre, f.nombre_madre, f.direccion
-        FROM familias f
-        LEFT JOIN cajas c ON c.familia_id = f.id
-        WHERE (c.codigo = ? OR f.codigo_unico = ?)
-        LIMIT 1`,
+      c.id            AS caja_id,
+      c.codigo        AS caja_codigo,
+      c.estado        AS caja_estado,
+      c.benefactor_id AS caja_benefactor_id,
+      c.familia_id    AS familia_id,
+      f.zona_id       AS zona_id,
+      f.codigo_unico  AS familia_codigo,
+      f.nombre_padre, f.nombre_madre, f.direccion
+      FROM familias f
+      LEFT JOIN cajas c ON c.familia_id = f.id
+      WHERE (c.codigo = ? OR f.codigo_unico = ?)
+      LIMIT 1`,
     [codigo, codigo]
   );
   return rows[0];
 }
 
-// 🔎 Nueva utilidad: resolver una lista de códigos contra cajas.codigo O familias.codigo_unico
+// 🔎 Resolver lista de códigos (cajas.codigo o familias.codigo_unico)
 async function resolveCajasByCodigos(conn, codigos) {
   if (!Array.isArray(codigos) || codigos.length === 0) {
     return { resolved: [], missing: [] };
   }
-
   const placeholders = codigos.map(() => '?').join(',');
   const sql = `
     SELECT 
@@ -55,7 +54,6 @@ async function resolveCajasByCodigos(conn, codigos) {
   `;
   const [rows] = await conn.query(sql, [...codigos, ...codigos]);
 
-  // Mapeo por ambos identificadores para respetar el orden original de "codigos"
   const map = new Map();
   for (const r of rows) {
     if (r.codigo) map.set(String(r.codigo), r);
@@ -70,6 +68,22 @@ async function resolveCajasByCodigos(conn, codigos) {
     else missing.push(code);
   }
   return { resolved, missing };
+}
+
+// Benefactor genérico para modalidad S/160 (cajas internas / parroquia)
+async function ensureGenericBenefactor(conn) {
+  const nombre = 'PARROQUIA - VENTA INTERNA';
+  const [rows] = await conn.query(
+    'SELECT id FROM benefactores WHERE nombre = ? LIMIT 1',
+    [nombre]
+  );
+  if (rows.length) return rows[0].id;
+
+  const [ins] = await conn.query(
+    'INSERT INTO benefactores (nombre, telefono, email, direccion) VALUES (?,?,?,?)',
+    [nombre, null, null, null]
+  );
+  return ins.insertId;
 }
 
 // GET /api/ventas/box/:codigo
@@ -92,91 +106,150 @@ router.get('/box/:codigo', authenticateToken, async (req, res) => {
   }
 });
 
-// POST /api/ventas  → cabecera (ventas) + detalle (ventas_cajas) + actualizar cajas
+// POST /api/ventas → registra venta y actualiza cajas
 router.post('/', authenticateToken, async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    const {
-      recibo, fecha, modalidad_id, punto_venta_id,
-      forma_pago, estado = 'Entregada a Benefactor',
-      monto, moneda = 'PEN',
-      benefactor,  // { id?, nombres, apellidos, telefono, correo }
-      codigos      // array de códigos (pueden ser cajas.codigo o familias.codigo_unico)
-    } = req.body || {};
+    const body = req.body || {};
 
-    if (!recibo?.trim() || !fecha || !benefactor || !Array.isArray(codigos) || codigos.length === 0) {
-      return res.status(400).json({ success: false, error: 'Recibo, fecha, benefactor y al menos 1 código son requeridos' });
+    const recibo           = body.recibo?.trim();
+    const fecha            = body.fecha;
+    const modalidad_id     = body.modalida_id || body.modalidad_id || null;
+    const punto_venta_id   = body.punto_venta_id || null;
+    const forma_pago       = body.forma_pago || null;
+    const monto            = Number(body.monto || 0);
+    const moneda           = body.moneda || 'PEN';
+    const benefactor       = body.benefactor || null;   // { id?, nombres, apellidos, telefono, correo }
+    const codigos          = Array.isArray(body.codigos) ? body.codigos : [];
+
+    const fecha_operacion  = body.op_fecha || body.fecha_operacion || null;
+    const hora_operacion   = body.op_hora  || body.hora_operacion  || null;
+    const nro_operacion    = body.op_numero|| body.nro_operacion   || null;
+    const observaciones    = body.obs || body.observaciones || null;
+    const fecha_devolucion = body.fecha_devolucion || null;
+
+    const is40  = Number(modalidad_id) === 1;
+    const is160 = Number(modalidad_id) === 2;
+
+    // Requeridos siempre
+    if (!recibo?.trim() || !fecha || !Number(monto) || !Number(modalidad_id) || !Number(punto_venta_id)) {
+      await conn.release();
+      return res.status(400).json({
+        success: false,
+        error: 'recibo, fecha, monto, modalidad_id y punto_venta_id son obligatorios'
+      });
     }
 
-    const montoTotal = Number(monto || 0);
+    // Si es S/40, sí exige benefactor + al menos una caja + fecha_devolucion
+    if (is40) {
+      if (!benefactor || !benefactor.nombres?.trim()) {
+        await conn.release();
+        return res.status(400).json({ success: false, error: 'Ingrese datos del benefactor' });
+      }
+      if (!Array.isArray(codigos) || codigos.filter(Boolean).length === 0) {
+        await conn.release();
+        return res.status(400).json({ success: false, error: 'Agregue al menos un código de caja' });
+      }
+      if (!fecha_devolucion) {
+        await conn.release();
+        return res.status(400).json({ success: false, error: 'Ingrese la fecha de devolución' });
+      }
+    }
+
+    // Estado por defecto según modalidad
+    const estadoBody  = body.estado && String(body.estado).trim();
+    const estadoFinal = estadoBody || (is40 ? 'Entregada a Benefactor' : 'Asignada');
 
     await conn.beginTransaction();
 
     // Unicidad de recibo
-    const [dup] = await conn.query('SELECT id FROM ventas WHERE recibo = ? LIMIT 1', [recibo.trim()]);
+    const [dup] = await conn.query('SELECT id FROM ventas WHERE recibo = ? LIMIT 1', [recibo]);
     if (dup.length) {
       await conn.rollback();
+      await conn.release();
       return res.status(400).json({ success: false, error: 'Recibo ya registrado' });
     }
 
-    // Upsert benefactor → usar COLUMNA nombre (no "nombres")
-    let benefactorId = benefactor.id || null;
-    const nombreCompuesto = [benefactor.nombres?.trim(), benefactor.apellidos?.trim()]
-      .filter(Boolean).join(' ').trim() || 'SIN NOMBRE';
-    const telefono  = benefactor.telefono?.trim() || null;
-    const email     = benefactor.correo?.trim()   || null;
-    const direccion = null; // si luego lo capturas
+    // ===== Resolver benefactorId =====
+    let benefactorId = (benefactor && typeof benefactor === 'object') ? (benefactor.id ?? null) : null;
 
-    if (!benefactorId) {
-      // Buscar si existe por (nombre + telefono)
-      const [bf] = await conn.query(
-        'SELECT id FROM benefactores WHERE nombre = ? AND IFNULL(telefono,"") = IFNULL(?, "") LIMIT 1',
-        [nombreCompuesto, telefono]
-      );
-      if (bf.length) {
-        benefactorId = bf[0].id;
-        await conn.query(
-          'UPDATE benefactores SET telefono=?, email=?, direccion=? WHERE id=?',
-          [telefono, email, direccion, benefactorId]
+    if (is40) {
+      // S/40: upsert real con datos del benefactor
+      const nombreCompuesto = [
+        benefactor?.nombres?.trim(),
+        benefactor?.apellidos?.trim()
+      ].filter(Boolean).join(' ').trim() || 'SIN NOMBRE';
+
+      const telefono  = benefactor?.telefono?.trim() || null;
+      const email     = benefactor?.correo?.trim()   || null;
+      const direccion = null;
+
+      if (!benefactorId) {
+        const [bf] = await conn.query(
+          'SELECT id FROM benefactores WHERE nombre = ? AND IFNULL(telefono,"") = IFNULL(?, "") LIMIT 1',
+          [nombreCompuesto, telefono]
         );
+        if (bf.length) {
+          benefactorId = bf[0].id;
+          await conn.query(
+            'UPDATE benefactores SET telefono=?, email=?, direccion=? WHERE id=?',
+            [telefono, email, direccion, benefactorId]
+          );
+        } else {
+          const [ins] = await conn.query(
+            'INSERT INTO benefactores (nombre, telefono, email, direccion) VALUES (?,?,?,?)',
+            [nombreCompuesto, telefono, email, direccion]
+          );
+          benefactorId = ins.insertId;
+        }
       } else {
-        const [ins] = await conn.query(
-          'INSERT INTO benefactores (nombre, telefono, email, direccion) VALUES (?,?,?,?)',
-          [nombreCompuesto, telefono, email, direccion]
+        await conn.query(
+          'UPDATE benefactores SET nombre=?, telefono=?, email=?, direccion=? WHERE id=?',
+          [nombreCompuesto, telefono, email, direccion, Number(benefactorId)]
         );
-        benefactorId = ins.insertId;
       }
+    } else if (is160) {
+      // S/160: NO hay benefactor del cliente → usar benefactor genérico obligatorio
+      benefactorId = await ensureGenericBenefactor(conn);
     } else {
-      await conn.query(
-        'UPDATE benefactores SET nombre=?, telefono=?, email=?, direccion=? WHERE id=?',
-        [nombreCompuesto, telefono, email, direccion, Number(benefactorId)]
-      );
+      // Otras modalidades (si se agregan en el futuro): por ahora, también benefactor genérico
+      benefactorId = await ensureGenericBenefactor(conn);
     }
 
-    // Cabecera de venta
+    // Para S/160 no se guarda fecha_devolucion
+    const fechaDevol = is40 ? (fecha_devolucion || null) : null;
+
+    // Cabecera ventas
     const [vIns] = await conn.query(
       `INSERT INTO ventas 
-        (recibo, fecha, modalidad_id, punto_venta_id, forma_pago, estado, monto, moneda, benefactor_id)
-        VALUES (?,?,?,?,?,?,?,?,?)`,
+        (recibo, fecha, modalidad_id, punto_venta_id, forma_pago, estado, monto, moneda,
+        benefactor_id, fecha_devolucion, observaciones, fecha_operacion, hora_operacion, nro_operacion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        recibo.trim(),
+        String(recibo).trim(),
         fecha,
-        modalidad_id || null,
-        punto_venta_id || null,
+        Number(modalidad_id),
+        Number(punto_venta_id),
         forma_pago || null,
-        estado,
-        montoTotal,
-        moneda,
-        benefactorId
+        estadoFinal,
+        Number(monto || 0),
+        moneda || 'PEN',
+        benefactorId, // 👈 nunca null ahora
+        fechaDevol,
+        observaciones ? String(observaciones).slice(0, 62) : null,
+        fecha_operacion || null,
+        hora_operacion || null,
+        nro_operacion ? String(nro_operacion).slice(0, 32) : null
       ]
     );
     const ventaId = vIns.insertId;
 
-    // ✅ Validar/Resolver todas las cajas a partir de codigos[] (caja.codigo o familia.codigo_unico)
+    // Resolver cajas y validar disponibilidad (solo si hay códigos)
     const { resolved: cajasResueltas, missing: faltantes } = await resolveCajasByCodigos(conn, codigos);
-    if (faltantes.length) throw new Error(`Códigos no encontrados: ${faltantes.join(', ')}`);
+    if (faltantes.length) {
+      throw new Error(`Códigos no encontrados: ${faltantes.join(', ')}`);
+    }
 
-    // Disponibilidad: permitimos 'disponible' o 'libre' o vacío
     const noDisponibles = cajasResueltas
       .filter(c => {
         const e = String(c.estado || '').toLowerCase();
@@ -184,9 +257,16 @@ router.post('/', authenticateToken, async (req, res) => {
       })
       .map(c => c.codigo || c.codigo_unico);
 
-    if (noDisponibles.length) throw new Error(`Cajas no disponibles: ${noDisponibles.join(', ')}`);
+    if (noDisponibles.length) {
+      throw new Error(`Cajas no disponibles: ${noDisponibles.join(', ')}`);
+    }
 
-    // Detalle en ventas_cajas + actualizar cajas (una fila por caja resuelta)
+    // Detalle ventas_cajas + actualizar cajas (solo si hay cajas)
+    const estadoCaja =
+      (estadoFinal === 'Entregada a Benefactor') ? 'entregada' :
+      (estadoFinal === 'Asignada')               ? 'asignada'  :
+      (estadoFinal === 'Devuelta')               ? 'devuelta'  : null;
+
     for (const c of cajasResueltas) {
       await conn.query(
         `INSERT INTO ventas_cajas
@@ -195,41 +275,282 @@ router.post('/', authenticateToken, async (req, res) => {
         [
           c.id,
           benefactorId,
-          modalidad_id || null,
-          punto_venta_id || null,
+          modalidad_id,
+          punto_venta_id,
           req.user?.id || 1,
-          montoTotal, // Si luego usas precio unitario por modalidad, ajusta aquí
+          monto,
           moneda,
           fecha,
           'PAGADO'
         ]
       );
 
-      await conn.query(
-        `UPDATE cajas
-          SET benefactor_id=?, modalidad_id=?, punto_venta_id=?, estado=?
-          WHERE id=?`,
-        [
-          benefactorId,
-          modalidad_id || null,
-          punto_venta_id || null,
-          (estado === 'Entregada a Benefactor') ? 'entregada' :
-          (estado === 'Asignada' ? 'asignada' : 'devuelta'),
-          c.id
-        ]
-      );
+      if (estadoCaja) {
+        await conn.query(
+          `UPDATE cajas
+            SET benefactor_id=?, modalidad_id=?, punto_venta_id=?, estado=?
+            WHERE id=?`,
+          [
+            benefactorId,
+            modalidad_id,
+            punto_venta_id,
+            estadoCaja,
+            c.id
+          ]
+        );
+      }
     }
 
     await conn.commit();
+    await conn.release();
     res.json({ success: true, data: { id: ventaId }, message: 'Venta registrada' });
   } catch (e) {
     await conn.rollback();
+    await conn.release();
     console.error('POST /ventas', e);
-    const msg = e.message?.includes('Duplicate entry') ? 'Recibo ya registrado' : (e.message || 'Error registrando venta');
-    res.status(500).json({ success: false, error: msg });
+    const msg = e.message?.includes('Duplicate entry')
+      ? 'Recibo ya registrado'
+      : (e.message || 'Error registrando venta');
+    // 400 para ver el mensaje en Network
+    res.status(400).json({ success: false, error: msg });
+  }
+});
+
+
+
+// === LISTADO paginado y export ===
+
+// Normaliza filtros desde querystring
+function parseVentasQuery(q = {}) {
+  const page  = Math.max(1, parseInt(q.page || '1', 10));
+  const limit = Math.min(100000, Math.max(1, parseInt(q.limit || '20', 10)));
+  const offset = (page - 1) * limit;
+
+  const search       = (q.search || '').trim();
+  const forma_pago   = (q.forma_pago || '').trim();
+  const modalidad_id = q.modalidad_id ? Number(q.modalidad_id) : null;
+  const estado       = (q.estado || '').trim();
+  const fecha_desde  = (q.fecha_desde || '').trim();
+  const fecha_hasta  = (q.fecha_hasta || '').trim();
+
+  const sort_by  = (q.sort_by || 'v.fecha').trim();
+  const sort_dir = String(q.sort_dir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+  return { page, limit, offset, search, forma_pago, modalidad_id, estado, fecha_desde, fecha_hasta, sort_by, sort_dir };
+}
+
+// WHERE + params
+function buildVentasWhere({ search, forma_pago, modalidad_id, estado, fecha_desde, fecha_hasta }) {
+  const where = [];
+  const params = [];
+
+  if (search) {
+    where.push(`(
+      v.recibo LIKE ?
+      OR b.nombre LIKE ?
+      OR v.moneda LIKE ?
+    )`);
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (forma_pago)  { where.push(`v.forma_pago = ?`);   params.push(forma_pago); }
+  if (modalidad_id){ where.push(`v.modalidad_id = ?`); params.push(modalidad_id); }
+  if (estado)      { where.push(`v.estado = ?`);       params.push(estado); }
+  if (fecha_desde) { where.push(`v.fecha >= ?`);       params.push(fecha_desde); }
+  if (fecha_hasta) { where.push(`v.fecha <= ?`);       params.push(fecha_hasta); }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  return { whereSql, params };
+}
+
+// GET /api/ventas → listado paginado
+router.get('/', authenticateToken, async (req, res) => {
+  try {
+    const q = parseVentasQuery(req.query);
+    const { whereSql, params } = buildVentasWhere(q);
+
+    const sqlBase = `
+    FROM ventas v
+    LEFT JOIN benefactores b ON b.id = v.benefactor_id
+    LEFT JOIN campania_modalidades m ON m.id = v.modalidad_id
+    LEFT JOIN puntos_venta p        ON p.id = v.punto_venta_id
+    LEFT JOIN ventas_cajas vc       ON vc.fecha = v.fecha AND vc.benefactor_id = v.benefactor_id
+    LEFT JOIN cajas c               ON c.id = vc.caja_id
+    ${whereSql}
+  `;
+  
+  const [tc] = await pool.query(`SELECT COUNT(DISTINCT v.id) AS total ${sqlBase}`, params);
+  const total = tc[0]?.total || 0;
+  
+  const [rows] = await pool.query(
+    `
+    SELECT 
+      v.id, v.recibo, v.fecha, v.modalidad_id, v.punto_venta_id,
+      v.forma_pago, v.estado, v.monto, v.moneda,
+      v.fecha_operacion, v.hora_operacion, v.nro_operacion, v.observaciones,
+      v.fecha_devolucion,
+  
+      b.id AS benefactor_id, b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono, b.email AS benefactor_email,
+  
+      m.nombre AS modalidad_nombre,
+      p.nombre AS punto_venta_nombre,
+  
+      GROUP_CONCAT(DISTINCT c.codigo ORDER BY c.codigo SEPARATOR ', ') AS codigos
+    ${sqlBase}
+    GROUP BY v.id
+    ORDER BY ${q.sort_by} ${q.sort_dir}
+    LIMIT ? OFFSET ?
+    `,
+    [...params, q.limit, q.offset]
+  );
+  
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: {
+        total,
+        page: q.page,
+        totalPages: Math.max(1, Math.ceil(total / q.limit)),
+        hasPrev: q.page > 1,
+        hasNext: q.page * q.limit < total
+      }
+    });
+  } catch (e) {
+    console.error('GET /ventas', e);
+    res.status(500).json({ success: false, error: 'Error listando ventas' });
+  }
+});
+
+// GET /api/ventas/export → mismo filtro, sin paginar
+router.get('/export', authenticateToken, async (req, res) => {
+  try {
+    const q = parseVentasQuery({ ...req.query, page: 1, limit: 100000 });
+    const { whereSql, params } = buildVentasWhere(q);
+
+    const sqlBase = `
+      FROM ventas v
+      LEFT JOIN benefactores b           ON b.id = v.benefactor_id
+      LEFT JOIN campania_modalidades m   ON m.id = v.modalidad_id
+      LEFT JOIN puntos_venta p           ON p.id = v.punto_venta_id
+      LEFT JOIN ventas_cajas vc          ON vc.fecha = v.fecha AND vc.benefactor_id = v.benefactor_id
+      LEFT JOIN cajas c                  ON c.id = vc.caja_id
+      ${whereSql}
+    `;
+
+    const [rows] = await pool.query(
+      `
+      SELECT 
+        v.id, v.recibo, v.fecha, v.modalidad_id, v.punto_venta_id,
+        v.forma_pago, v.estado, v.monto, v.moneda,
+        v.fecha_operacion, v.hora_operacion, v.nro_operacion, v.observaciones,
+        v.fecha_devolucion,
+
+        b.id    AS benefactor_id,
+        b.nombre AS benefactor_nombre,
+        b.telefono AS benefactor_telefono,
+        b.email AS benefactor_email,
+
+        m.nombre AS modalidad_nombre,
+        p.nombre AS punto_venta_nombre,
+
+        GROUP_CONCAT(DISTINCT c.codigo ORDER BY c.codigo SEPARATOR ', ') AS codigos
+      ${sqlBase}
+      GROUP BY v.id
+      ORDER BY ${q.sort_by} ${q.sort_dir}
+      LIMIT 100000
+      `,
+      params
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (e) {
+    console.error('GET /ventas/export', e);
+    res.status(500).json({ success: false, error: 'Error exportando ventas' });
+  }
+});
+
+
+// PUT /api/ventas/:id  → actualizar campos básicos y (opcional) estado de cajas
+router.put('/:id', authenticateToken, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const ventaId = Number(req.params.id);
+    if (!ventaId) return res.status(400).json({ success: false, error: 'ID inválido' });
+
+    const {
+      fecha,
+      modalidad_id,
+      punto_venta_id,
+      forma_pago,
+      estado,               // 'Entregada a Benefactor' | 'Asignada' | 'Devuelta' (etc.)
+      fecha_devolucion,
+      observaciones,
+      propagar_estado_cajas // boolean opcional
+    } = req.body || {};
+
+    await conn.beginTransaction();
+
+    // Traer venta actual (para poder propagar a cajas si hace falta)
+    const [vRows] = await conn.query('SELECT id, benefactor_id, fecha FROM ventas WHERE id=? LIMIT 1', [ventaId]);
+    if (!vRows.length) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, error: 'Venta no encontrada' });
+    }
+    const venta = vRows[0];
+
+    // Actualizar cabecera
+    await conn.query(`
+      UPDATE ventas SET
+        fecha = COALESCE(?, fecha),
+        modalidad_id = COALESCE(?, modalidad_id),
+        punto_venta_id = COALESCE(?, punto_venta_id),
+        forma_pago = COALESCE(?, forma_pago),
+        estado = COALESCE(?, estado),
+        fecha_devolucion = COALESCE(?, fecha_devolucion),
+        observaciones = COALESCE(?, observaciones)
+      WHERE id = ?`,
+      [
+        fecha || null,
+        modalidad_id || null,
+        punto_venta_id || null,
+        forma_pago || null,
+        estado || null,
+        fecha_devolucion || null,
+        observaciones ? String(observaciones).slice(0, 62) : null,
+        ventaId
+      ]
+    );
+
+    // Propagar estado a las cajas involucradas (opcional)
+    if (estado && propagar_estado_cajas) {
+      const estadoCaja =
+        (estado === 'Entregada a Benefactor') ? 'entregada' :
+        (estado === 'Asignada')               ? 'asignada'  :
+        (estado === 'Devuelta')               ? 'devuelta'  :
+        null;
+
+      if (estadoCaja) {
+        await conn.query(`
+          UPDATE cajas c
+          JOIN ventas_cajas vc ON vc.caja_id = c.id
+          JOIN ventas v ON v.benefactor_id = vc.benefactor_id AND v.fecha = vc.fecha
+          SET c.estado = ?
+          WHERE v.id = ?`,
+          [estadoCaja, ventaId]
+        );
+      }
+    }
+
+    await conn.commit();
+    res.json({ success: true, message: 'Venta actualizada' });
+  } catch (e) {
+    await conn.rollback();
+    console.error('PUT /ventas/:id', e);
+    res.status(500).json({ success: false, error: 'Error actualizando venta' });
   } finally {
     conn.release();
   }
 });
+
 
 module.exports = router;

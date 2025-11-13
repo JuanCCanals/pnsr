@@ -1,88 +1,345 @@
 // /frontend/src/pages/Ventas.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from "react";
+import ExcelJS from "exceljs";
+import { ventasService, catalogosService } from "../services/api";
 
-const authFetch = async (url, opts={}) => {
-  const token = localStorage.getItem('token');
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(opts.headers || {})
-    }
-  });
-  return res.json();
+// Normaliza cualquier fecha (Date/ISO/string) a yyyy-MM-dd
+const toYMD = (v) => {
+  if (!v) return "";
+  // si ya viene como yyyy-MM-dd, la devolvemos tal cual
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  if (isNaN(d)) {
+    // como fallback, recortar si es ISO: "2025-11-20T05:00:00.000Z" -> "2025-11-20"
+    if (typeof v === "string" && v.length >= 10) return v.slice(0, 10);
+    return "";
+  }
+  // Ajuste para evitar desfase de zona horaria al sacar YYYY-MM-DD
+  const off = d.getTimezoneOffset();
+  const d2 = new Date(d.getTime() - off * 60000);
+  return d2.toISOString().slice(0, 10);
 };
 
 export default function Ventas() {
-  const [show, setShow] = useState(true);
-  const [recibo, setRecibo] = useState('');
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0,10));
-  const [puntoVenta, setPuntoVenta] = useState('');
-  const [formaPago, setFormaPago] = useState('Efectivo');
-  const [estado, setEstado] = useState('Entregada a Benefactor');
-  const [monto, setMonto] = useState('40.00');
+  // ---------- listado / filtros ----------
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const limit = 20;
+  const [pagination, setPagination] = useState({
+    total: 0, totalPages: 1, hasPrev: false, hasNext: false,
+  });
 
-  const [codigo, setCodigo] = useState('');
-  const [items, setItems] = useState([]); // {codigo, ok, error, detalle?}
+  const [search, setSearch] = useState("");
+  const [formaFilter, setFormaFilter] = useState("");
+  const [modalidadFilter, setModalidadFilter] = useState("");
+  const [fechaIni, setFechaIni] = useState("");
+  const [fechaFin, setFechaFin] = useState("");
 
-  const [bf, setBf] = useState({ nombres: '', apellidos: '', telefono: '', correo: '' });
-  const [msg, setMsg] = useState({ type: '', text: '' });
-  const total = useMemo(() => Number(monto || 0), [monto]);
+  // catálogos
+  const [modalidades, setModalidades] = useState([]);
+  const [puntos, setPuntos] = useState([]);
 
-  const [modalidades, setModalidades] = useState([]);      // [{id,nombre,costo}]
-  const [puntos, setPuntos] = useState([]);                // [{id,nombre}]
+  // ---------- modal (create/edit) ----------
+  const [showModal, setShowModal] = useState(false);
+  const [mode, setMode] = useState("create"); // 'create' | 'edit'
+  const [editId, setEditId] = useState(null);
+  const [propagarEstado, setPropagarEstado] = useState(false);
+  //const [editData, setEditData] = useState(null); // si es edición: { id, ... }
+  const [toast, setToast] = useState(null); // {text, type}
+
+  const showToast = (text, type="success") => {
+    setToast({ text, type });
+    setTimeout(() => setToast(null), 1800);
+  };
+
+  // campos compartidos
+  const [recibo, setRecibo] = useState("");
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [modalidadId, setModalidadId] = useState(null);
+  const [monto, setMonto] = useState("40.00");
   const [puntoVentaId, setPuntoVentaId] = useState(null);
+  const [formaPago, setFormaPago] = useState("Efectivo");
+  const [devolucion, setDevolucion] = useState("");
+  const [obsVenta, setObsVenta] = useState("");
+  const [estadoVenta, setEstadoVenta] = useState("Entregada a Benefactor");
 
+  // operación (solo si formaPago ≠ Efectivo, solo en create)
+  const [opFecha, setOpFecha] = useState("");
+  const [opHora, setOpHora] = useState("");
+  const [opNumero, setOpNumero] = useState("");
+  const [opObs, setOpObs] = useState("");
+
+  // benefactor (solo S/40 al crear)
+  const [bf, setBf] = useState({ nombres: "", apellidos: "", telefono: "", correo: "" });
+
+  // cajas (solo S/40 al crear)
+  const [codigo, setCodigo] = useState("");
+  const [items, setItems] = useState([]); // [{codigo, ok, error?}]
+
+  const [msg, setMsg] = useState({ type: "", text: "" });
+
+  // ---------- load catálogos + primer fetch ----------
   useEffect(() => {
     (async () => {
-      const token = localStorage.getItem('token');
       const [mRes, pRes] = await Promise.all([
-        fetch('/api/catalogos/modalidades', { headers: { Authorization: `Bearer ${token}` } }).then(r=>r.json()),
-        fetch('/api/catalogos/puntos-venta', { headers: { Authorization: `Bearer ${token}` } }).then(r=>r.json())
+        catalogosService.getModalidades(),
+        catalogosService.getPuntosVenta(),
       ]);
+
       if (mRes?.success) {
         setModalidades(mRes.data || []);
         if (mRes.data?.length) {
           setModalidadId(mRes.data[0].id);
-          setMonto(String(Number(mRes.data[0].costo || 0).toFixed(2))); // ← setea monto
+          setMonto(String(Number(mRes.data[0].costo || 0).toFixed(2)));
         }
       }
       if (pRes?.success) {
         setPuntos(pRes.data || []);
         if (pRes.data?.length) setPuntoVentaId(pRes.data[0].id);
       }
+
+      fetchRows(1);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // cuando cambia modalidad, actualizar monto
+  // set monto when modalidad changes
   useEffect(() => {
-    const mod = modalidades.find(m => m.id === modalidadId);
+    const mod = modalidades.find((m) => m.id === modalidadId);
     if (mod) setMonto(String(Number(mod.costo || 0).toFixed(2)));
   }, [modalidadId, modalidades]);
 
-  const addCodigo = async () => {
-    const cod = (codigo || '').trim();
-    if (!cod) return;
-    setCodigo('');
-    // valida contra API
-    const resp = await authFetch(`/api/ventas/box/${encodeURIComponent(cod)}`);
-    if (resp?.success) {
-      setItems(prev => [...prev, { codigo: cod, ok: true }]);
+  // Ajusta estado por defecto según modalidad (solo al CREAR)
+  useEffect(() => {
+    const mod = modalidades.find((m) => m.id === modalidadId);
+    const costo = Number(mod?.costo || 0);
+
+    if (mode !== "create") return; // 👈 no tocar cuando editas
+
+    if (costo === 160) {
+      setEstadoVenta("Asignada");
+      setDevolucion("");           // 👈 limpiamos por si quedó algo escrito
     } else {
-      setItems(prev => [...prev, { codigo: cod, ok: false, error: resp?.error || 'No válida' }]);
+      setEstadoVenta("Entregada a Benefactor");
+    }
+  }, [modalidadId, modalidades, mode]);
+
+  const selMod = modalidades.find((m) => m.id === modalidadId);
+  const costoSel = Number(selMod?.costo || 0);
+  const is40 = costoSel === 40;
+  const is160 = costoSel === 160;
+
+  // ---------- listado ----------
+  async function fetchRows(goToPage = page) {
+    try {
+      setLoading(true);
+      const params = {
+        page: goToPage,
+        limit,
+        search:        search || undefined,
+        forma_pago:    formaFilter || undefined,
+        modalidad_id:  modalidadFilter || undefined,
+        fecha_desde:   fechaIni || undefined,
+        fecha_hasta:   fechaFin || undefined,
+      };
+      const r = await ventasService.getAll(params);
+      if (r?.success) {
+        setRows(r.data || []);
+        setPagination(r.pagination || { total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+        setPage(goToPage);
+      } else {
+        setRows([]);
+        setPagination({ total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ---------- export ----------
+  async function downloadExcel(filename, rows) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Ventas");
+
+    ws.columns = [
+      { header: "Recibo", key: "Recibo", width: 14 },
+      { header: "Fecha", key: "Fecha", width: 12 },
+      { header: "Modalidad", key: "Modalidad", width: 20 },
+      { header: "Monto", key: "Monto", width: 10 },
+      { header: "Moneda", key: "Moneda", width: 8 },
+      { header: "FormaPago", key: "FormaPago", width: 16 },
+      { header: "PuntoVenta", key: "PuntoVenta", width: 18 },
+      { header: "Benefactor", key: "Benefactor", width: 28 },
+      { header: "Códigos", key: "Codigos", width: 40 },
+      { header: "FecDevolución", key: "FecDevolucion", width: 14 },
+      { header: "Estado", key: "Estado", width: 18 },
+    ];
+
+    const header = ws.getRow(1);
+    header.font = { bold: true };
+    header.alignment = { vertical: "middle", horizontal: "center" };
+    header.eachCell((cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+    });
+
+    rows.forEach(r => ws.addRow(r));
+    ws.eachRow((row, n) => {
+      if (n === 1) return;
+      row.eachCell((cell) => {
+        cell.border = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+      });
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+  }
+
+  async function handleExportXlsxAll() {
+    try {
+      const params = {
+        page: 1,
+        limit: 100000,
+        search:        search || undefined,
+        forma_pago:    formaFilter || undefined,
+        modalidad_id:  modalidadFilter || undefined,
+        fecha_desde:   fechaIni || undefined,
+        fecha_hasta:   fechaFin || undefined,
+        sort_by: "v.fecha",
+        sort_dir: "desc",
+      };
+      const r = await ventasService.exportAll(params);
+      if (!r?.success || !Array.isArray(r.data) || r.data.length === 0) {
+        alert("No hay datos para exportar.");
+        return;
+      }
+
+      const rows = r.data.map(v => ({
+        Recibo:        v.recibo,
+        Fecha:         toYMD(v.fecha),
+        Modalidad:     v.modalidad_nombre || "",
+        Monto:         Number(v.monto || 0),
+        Moneda:        v.moneda || "PEN",
+        FormaPago:     v.forma_pago || "",
+        PuntoVenta:    v.punto_venta_nombre || "",
+        Benefactor:    v.benefactor_nombre || "",
+        Codigos:       v.codigos || "",
+        FecDevolucion: toYMD(v.fecha_devolucion),
+        Estado:        v.estado || "",
+      }));
+
+      await downloadExcel(
+        `ventas_filtrado_${new Date().toISOString().slice(0,10)}.xlsx`,
+        rows
+      );
+    } catch (e) {
+      console.error(e);
+      alert("No se pudo exportar el filtrado completo.");
+    }
+  }
+
+  // ---------- helpers modal ----------
+  const resetModal = () => {
+    setMsg({ type: "", text: "" });
+    setPropagarEstado(false);
+    setRecibo("");
+    setFecha(new Date().toISOString().slice(0, 10));
+    setModalidadId(modalidades[0]?.id || null);
+    setPuntoVentaId(puntos[0]?.id || null);
+    setFormaPago("Efectivo");
+    setOpFecha("");
+    setOpHora("");
+    setOpNumero("");
+    setOpObs("");
+    setDevolucion("");
+    setObsVenta("");
+    setEstadoVenta("Entregada a Benefactor");
+    setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
+    setCodigo("");
+    setItems([]);
+  };
+
+  const openCreateModal = () => {
+    setMode("create");
+    setEditId(null);
+    resetModal();
+    setShowModal(true);
+
+  };
+
+  const openEditModal = (r) => {
+    setMode("edit");
+    setEditId(r.id);
+    setMsg({ type: "", text: "" });
+
+    setRecibo(r.recibo || "");
+    //setFecha(toYMD(r.fecha) || new Date().toISOString().slice(0, 10));
+    setFecha(toYMD(r.fecha) || new Date().toISOString().slice(0, 10));
+    setModalidadId(r.modalidad_id || modalidades[0]?.id || null);
+    setPuntoVentaId(r.punto_venta_id || puntos[0]?.id || null);
+    setFormaPago(r.forma_pago || "Efectivo");
+    setDevolucion(toYMD(r.fecha_devolucion) || "");
+    setObsVenta(r.observaciones || "");
+    setEstadoVenta(r.estado || "Entregada a Benefactor");
+
+    // edición: no tocamos benefactor ni códigos
+    setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
+    setItems([]);
+    setPropagarEstado(false);
+
+    setShowModal(true);
+  };
+
+  // ---------- popup: manejo de cajas (create only) ----------
+  const addCodigo = async () => {
+    const cod = (codigo || "").trim();
+    if (!cod) return;
+    setCodigo("");
+    if (is160) return; // en S/160 no se asigna caja
+
+    const resp = await ventasService.buscarCaja(cod);
+    if (resp?.success) {
+      setItems((prev) => [...prev, { codigo: cod, ok: true }]);
+    } else {
+      setItems((prev) => [...prev, { codigo: cod, ok: false, error: resp?.error || "No válida" }]);
     }
   };
 
-  const removeItem = (idx) => setItems(prev => prev.filter((_,i) => i!==idx));
+  const removeItem = (idx) => setItems((prev) => prev.filter((_, i) => i !== idx));
 
-  const handleGrabar = async () => {
-    setMsg({ type:'', text:'' });
-    if (!recibo.trim()) return setMsg({ type:'error', text:'Coloca el No. de recibo' });
+ // ---------- guardar (create/edit) ----------
+const handleGrabar = async () => {
+  setMsg({ type: "", text: "" });
+
+  if (mode === "create") {
+    // Validaciones CREATE
+    if (!recibo.trim()) return setMsg({ type: "error", text: "Coloca el No. de recibo" });
+
     const codigos = items.filter(i => i.ok).map(i => i.codigo);
-    if (codigos.length === 0) return setMsg({ type:'error', text:'Agrega al menos una caja válida' });
-    if (!bf.nombres.trim()) return setMsg({ type:'error', text:'Ingresa el nombre del benefactor' });
+    if (is40 && codigos.length === 0)
+      return setMsg({ type: "error", text: "Agrega al menos una caja válida" });
+
+    if (is40) {
+      if (!bf.nombres.trim())
+        return setMsg({ type: "error", text: "Ingresa el nombre del benefactor" });
+      if (!devolucion)
+        return setMsg({ type: "error", text: "Ingresa la fecha de devolución" });
+    }
+
+    if (formaPago !== "Efectivo") {
+      if (!opFecha || !opHora || !opNumero.trim()) {
+        return setMsg({
+          type: "error",
+          text: "Completa Fecha, Hora y Nº de operación para la forma de pago seleccionada",
+        });
+      }
+    }
 
     const payload = {
       recibo: recibo.trim(),
@@ -90,136 +347,580 @@ export default function Ventas() {
       modalidad_id: modalidadId,
       punto_venta_id: puntoVentaId,
       forma_pago: formaPago || null,
-      estado,
+      estado: estadoVenta || "Entregada a Benefactor",
       monto: Number(monto || 0),
-      moneda: 'PEN',
-      benefactor: bf,
-      codigos
+      moneda: "PEN",
+      benefactor: is40 ? bf : null,
+      codigos: is40 ? codigos : [],
+      fecha_devolucion: is40 ? devolucion : null,
+      obs: obsVenta?.slice(0, 62) || null,
+      op_fecha:  formaPago !== "Efectivo" ? opFecha : null,
+      op_hora:   formaPago !== "Efectivo" ? opHora : null,
+      op_numero: formaPago !== "Efectivo" ? opNumero?.slice(0, 32) : null,
+      op_obs:    formaPago !== "Efectivo" ? opObs?.slice(0, 32) : null,
     };
 
-    const resp = await authFetch('/api/ventas', { method:'POST', body: JSON.stringify(payload) });
+    const resp = await ventasService.registrar(payload);
+
     if (resp?.success) {
-      setMsg({ type:'success', text:'Registro guardado' });
+      showToast("Registro guardado", "success");
+      setShowModal(false);
+      // resets mínimos
       setItems([]);
-      setRecibo(''); setBf({nombres:'',apellidos:'',telefono:'',correo:''});
+      setRecibo("");
+      setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
+      setDevolucion("");
+      setObsVenta("");
+      setOpFecha("");
+      setOpHora("");
+      setOpNumero("");
+      setOpObs("");
+      fetchRows(page || 1);
     } else {
-      setMsg({ type:'error', text: resp?.error || 'No se pudo guardar' });
+      setMsg({ type: "error", text: resp?.error || "No se pudo guardar" });
     }
-  };
 
-  if (!show) return null;
+  } else {
+    // EDIT
+    const payload = {
+      fecha,
+      modalidad_id: modalidadId,
+      punto_venta_id: puntoVentaId,
+      forma_pago: formaPago || null,
+      estado: estadoVenta || null,
+      fecha_devolucion: devolucion || null,
+      observaciones: obsVenta?.slice(0, 62) || null,
+      propagar_estado_cajas: !!propagarEstado,
+    };
 
+    const resp = await ventasService.update(editId, payload);
+
+    if (resp?.success) {
+      showToast("Gestión actualizada", "success");
+      setShowModal(false);
+      setMode("create");
+      setEditId(null);
+      fetchRows(page || 1);
+    } else {
+      setMsg({ type: "error", text: resp?.error || "No se pudo actualizar" });
+    }
+  }
+};
+
+
+  // ---------- Render ----------
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white w-[980px] rounded-xl shadow-lg p-6">
-        <h2 className="text-xl font-bold mb-4">Registro de Benefactor / Asignación de Cajas</h2>
-
-        {msg.text && (
-          <div className={`mb-3 px-3 py-2 rounded ${msg.type==='success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-            {msg.text}
-          </div>
-        )}
-
-        {/* Cabecera */}
-        <div className="grid grid-cols-2 gap-6">
-          <div className="grid grid-cols-3 gap-3 items-end">
-            <label className="col-span-1 text-sm">No. Recibo</label>
-            <input className="col-span-2 border rounded px-2 py-1" value={recibo} onChange={e=>setRecibo(e.target.value)} />
-
-            {/* Modalidad */}
-            <label className="col-span-1 text-sm">Modalidad</label>
-            <select className="col-span-2 border rounded px-2 py-1" value={modalidadId || ''} onChange={e=>setModalidadId(Number(e.target.value))}>
-              {modalidades.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
-            </select>
-
-            <label className="col-span-1 text-sm">Monto</label>
-            <input className="col-span-2 border rounded px-2 py-1 bg-gray-100" value={monto} readOnly />
-
-            {/* Punto de Venta */}
-            <label className="col-span-1 text-sm">Pto. Venta</label>
-            <select className="col-span-2 border rounded px-2 py-1" value={puntoVentaId || ''} onChange={e=>setPuntoVentaId(Number(e.target.value))}>
-              {puntos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
-
-            <label className="col-span-1 text-sm">Forma pago</label>
-            <select className="col-span-2 border rounded px-2 py-1" value={formaPago} onChange={e=>setFormaPago(e.target.value)}>
-              <option>Efectivo</option><option>Yape</option><option>Plin</option><option>Transferencia</option>
-            </select>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 items-end">
-            <label className="col-span-1 text-sm">Fecha</label>
-            <input type="date" className="col-span-2 border rounded px-2 py-1" value={fecha} onChange={e=>setFecha(e.target.value)} />
-
-            <label className="col-span-1 text-sm">Alfanumérico</label>
-            <div className="col-span-2 flex gap-2">
-              <input className="flex-1 border rounded px-2 py-1" value={codigo} onChange={e=>setCodigo(e.target.value)} />
-              <button onClick={addCodigo} className="px-3 py-1 rounded bg-blue-600 text-white">Agregar</button>
-            </div>
-
-            <label className="col-span-1 text-sm">Estado</label>
-            <select className="col-span-2 border rounded px-2 py-1" value={estado} onChange={e=>setEstado(e.target.value)}>
-              <option>Entregada a Benefactor</option>
-              <option>Reservada</option>
-            </select>
-          </div>
+    <div className="p-6">
+      {/* Toast simple */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-[9999] px-4 py-2 rounded shadow
+          ${toast.type === "success" ? "bg-emerald-600 text-white" : "bg-red-600 text-white"}`}>
+          {toast.text}
         </div>
-
-        {/* Benefactor */}
-        <div className="mt-5">
-          <h3 className="font-semibold mb-2">Benefactor</h3>
-          <div className="grid grid-cols-2 gap-6">
-            <div className="grid grid-cols-3 gap-3 items-end">
-              <label className="text-sm">Nombre</label>
-              <input className="col-span-2 border rounded px-2 py-1" value={bf.nombres} onChange={e=>setBf({...bf, nombres:e.target.value})} />
-              <label className="text-sm">Apellido</label>
-              <input className="col-span-2 border rounded px-2 py-1" value={bf.apellidos} onChange={e=>setBf({...bf, apellidos:e.target.value})} />
-            </div>
-            <div className="grid grid-cols-3 gap-3 items-end">
-              <label className="text-sm">Teléfono</label>
-              <input className="col-span-2 border rounded px-2 py-1" value={bf.telefono} onChange={e=>setBf({...bf, telefono:e.target.value})} />
-              <label className="text-sm">Correo</label>
-              <input className="col-span-2 border rounded px-2 py-1" value={bf.correo} onChange={e=>setBf({...bf, correo:e.target.value})} />
-            </div>
-          </div>
+      )}
+      {/* Encabezado */}
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Gestión</h1>
+          <p className="text-gray-600 dark:text-gray-400">
+            Asignación de cajas, registro de pagos y devoluciones.
+          </p>
         </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+          >
+            Asignar caja
+          </button>
+          <button
+            type="button"
+            onClick={handleExportXlsxAll}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+          >
+            Exportar Excel
+          </button>
+        </div>
+      </div>
 
-        {/* Tabla */}
-        <div className="mt-6">
-          <table className="w-full border border-gray-300 text-sm">
-            <thead className="bg-gray-100">
+      {/* Filtros */}
+      <div className="flex flex-col lg:flex-row gap-3 mb-4">
+        <input
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Buscar (recibo, beneficiario, código)…"
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        />
+        <select
+          value={modalidadFilter}
+          onChange={(e) => {
+            setModalidadFilter(e.target.value);
+            setPage(1);
+          }}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">Todas las modalidades</option>
+          {modalidades.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.nombre} (S/ {Number(m.costo || 0).toFixed(2)})
+            </option>
+          ))}
+        </select>
+        <select
+          value={formaFilter}
+          onChange={(e) => {
+            setFormaFilter(e.target.value);
+            setPage(1);
+          }}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">Todas las formas</option>
+          <option>Efectivo</option>
+          <option>Yape</option>
+          <option>Plin</option>
+          <option>Transferencia</option>
+          <option>Interbancario</option>
+        </select>
+
+        <input
+          type="date"
+          value={fechaIni}
+          onChange={(e) => setFechaIni(e.target.value)}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        />
+        <input
+          type="date"
+          value={fechaFin}
+          onChange={(e) => setFechaFin(e.target.value)}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+        />
+        <div className="flex gap-2">
+          <button onClick={() => fetchRows(1)} className="px-3 py-2 rounded bg-blue-600 text-white">
+            Aplicar
+          </button>
+          <button
+            onClick={() => {
+              setSearch("");
+              setModalidadFilter("");
+              setFormaFilter("");
+              setFechaIni("");
+              setFechaFin("");
+              fetchRows(1);
+            }}
+            className="px-3 py-2 rounded border"
+          >
+            Limpiar
+          </button>
+        </div>
+      </div>
+
+      {/* Tabla: columnas reducidas */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700">
               <tr>
-                <th className="border px-2 py-1 text-left">Alfanumérico</th>
-                <th className="border px-2 py-1 text-left">Estado</th>
-                <th className="border px-2 py-1 text-left">Acción</th>
+                {[
+                  "Fecha",
+                  "Recibo",
+                  "Benefactor",
+                  "Códigos",
+                  "Fec. Devol.",
+                  "Estado",
+                  "Acciones"
+                ].map((h) => (
+                  <th
+                    key={h}
+                    className="px-5 py-3 text-left text-xs font-semibold uppercase text-gray-600 dark:text-gray-300"
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody>
-              {items.map((it, idx) => (
-                <tr key={idx}>
-                  <td className="border px-2 py-1">{it.codigo}</td>
-                  <td className={`border px-2 py-1 ${it.ok ? 'text-green-700' : 'text-red-700'}`}>{it.ok ? 'OK' : it.error || 'Error'}</td>
-                  <td className="border px-2 py-1">
-                    <button onClick={()=>removeItem(idx)} className="px-2 py-1 bg-black text-white rounded">Eliminar</button>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {loading && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-6 text-center">
+                    Cargando…
                   </td>
                 </tr>
-              ))}
-              {items.length === 0 && (
-                <tr><td className="border px-2 py-2 text-center text-gray-500" colSpan="3">Sin cajas añadidas</td></tr>
               )}
+              {!loading && rows.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-6 text-center text-gray-500">
+                    Sin resultados
+                  </td>
+                </tr>
+              )}
+              {!loading &&
+                rows.map((r, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="px-5 py-3 whitespace-nowrap">{toYMD(r.fecha)}</td>
+                    <td className="px-5 py-3 whitespace-nowrap">{r.recibo}</td>
+                    <td className="px-5 py-3">{r.benefactor_nombre || ""}</td>
+                    <td className="px-5 py-3">{r.codigos || ""}</td>
+                    <td className="px-5 py-3 whitespace-nowrap">{toYMD(r.fecha_devolucion) || "—"}</td>
+                    <td className="px-5 py-3 whitespace-nowrap">
+                      <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
+                        {r.estado || "—"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 whitespace-nowrap">
+                    <button
+                      className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
+                      onClick={() => openEditModal(r)}
+                    >
+                      Modificar
+                    </button>
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
 
-        {/* Footer */}
-        <div className="mt-6 flex justify-between">
-          <div className="text-sm font-semibold">Total: S/ {total.toFixed(2)}</div>
-          <div className="space-x-2">
-            <button className="px-3 py-2 rounded bg-gray-200" onClick={()=>setShow(false)}>Salir</button>
-            <button className="px-3 py-2 rounded bg-green-600 text-white" onClick={handleGrabar}>Grabar</button>
+        {/* Paginación simple */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 dark:border-gray-700">
+          <div className="text-sm text-gray-600 dark:text-gray-300">
+            {pagination.total
+              ? (
+                <>
+                  Mostrando {(page - 1) * limit + 1} – {Math.min(page * limit, pagination.total)} de {pagination.total}
+                </>
+                )
+              : "—"}
+          </div>
+          <div className="flex gap-2">
+            <button
+              disabled={!pagination.hasPrev}
+              onClick={() => fetchRows(Math.max(1, page - 1))}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+            >
+              Anterior
+            </button>
+            <span className="px-3 py-2 rounded bg-blue-600 text-white">{page}</span>
+            <button
+              disabled={!pagination.hasNext}
+              onClick={() => fetchRows(page + 1)}
+              className="px-3 py-2 border rounded disabled:opacity-50"
+            >
+              Siguiente
+            </button>
           </div>
         </div>
       </div>
+
+      {/* ===== Modal Asignar/Modificar (compacto + scroll interno) ===== */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 w-[980px] max-w-[95vw] max-h-[92vh] overflow-auto rounded-xl shadow-lg p-6">
+            <div className="flex items-center justify-between mb-4 sticky top-0 bg-white dark:bg-gray-800 z-10">
+              <h2 className="text-xl font-bold">
+                {mode === "create" ? "Asignar Caja / Registrar Venta" : `Modificar Venta #${editId}`}
+              </h2>
+              <button onClick={() => setShowModal(false)} className="px-2 py-1 rounded bg-gray-200">
+                ✕
+              </button>
+            </div>
+
+            {msg.text && (
+              <div
+                className={`mb-3 px-3 py-2 rounded ${
+                  msg.type === "success" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                }`}
+              >
+                {msg.text}
+              </div>
+            )}
+
+            {/* Cabecera compacta en 3 columnas */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="text-sm block mb-1">No. Recibo</label>
+                <input
+                  className={`w-full border rounded px-2 py-1 ${mode==='edit' ? 'bg-gray-100' : ''}`}
+                  value={recibo}
+                  onChange={(e) => setRecibo(e.target.value)}
+                  readOnly={mode === "edit"}
+                />
+              </div>
+              <div>
+                <label className="text-sm block mb-1">Fecha</label>
+                <input
+                  type="date"
+                  className="w-full border rounded px-2 py-1"
+                  value={fecha}
+                  onChange={(e) => setFecha(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="text-sm block mb-1">Estado</label>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={estadoVenta}
+                  onChange={(e) => setEstadoVenta(e.target.value)}
+                  disabled={mode === "create" && is160}   // 👈 bloquea en S/160 al crear
+                  title={mode === "create" && is160 ? "Estado fijado en 'Asignada' para modalidad S/160" : undefined}
+                >
+                  <option>Entregada a Benefactor</option>
+                  <option>Asignada</option>
+                  <option>Devuelta</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm block mb-1">Modalidad</label>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={modalidadId || ""}
+                  onChange={(e) => setModalidadId(Number(e.target.value))}
+                >
+                  {modalidades.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.nombre} (S/ {Number(m.costo || 0).toFixed(2)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm block mb-1">Monto</label>
+                <input className="w-full border rounded px-2 py-1 bg-gray-100" value={monto} readOnly />
+              </div>
+              <div>
+                <label className="text-sm block mb-1">Pto. Venta</label>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={puntoVentaId || ""}
+                  onChange={(e) => setPuntoVentaId(Number(e.target.value))}
+                >
+                  {puntos.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm block mb-1">Forma pago</label>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={formaPago}
+                  onChange={(e) => setFormaPago(e.target.value)}
+                >
+                  <option>Efectivo</option>
+                  <option>Yape</option>
+                  <option>Plin</option>
+                  <option>Transferencia</option>
+                  <option>Interbancario</option>
+                </select>
+              </div>
+
+              {/* Detalle de depósito (solo al crear y si forma de pago no es Efectivo) */}
+              {mode === "create" && formaPago !== "Efectivo" && (
+                <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="text-sm block mb-1">Fecha depósito</label>
+                    <input
+                      type="date"
+                      className="w-full border rounded px-2 py-1"
+                      value={opFecha}
+                      onChange={(e) => setOpFecha(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm block mb-1">Hora depósito</label>
+                    <input
+                      type="time"
+                      className="w-full border rounded px-2 py-1"
+                      value={opHora}
+                      onChange={(e) => setOpHora(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm block mb-1">Nº depósito</label>
+                    <input
+                      maxLength={32}
+                      className="w-full border rounded px-2 py-1"
+                      value={opNumero}
+                      onChange={(e) => setOpNumero(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm block mb-1">Obs. depósito</label>
+                    <input
+                      maxLength={32}
+                      className="w-full border rounded px-2 py-1"
+                      value={opObs}
+                      onChange={(e) => setOpObs(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+
+              {/* Fecha de devolución: solo S/40 */}
+              {is40 && (
+                <div>
+                  <label className="text-sm block mb-1">Fecha de devolución</label>
+                  <input
+                    type="date"
+                    className="w-full border rounded px-2 py-1"
+                    value={devolucion}
+                    onChange={(e) => setDevolucion(e.target.value)}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="text-sm block mb-1">Observaciones (62)</label>
+                <input
+                  maxLength={62}
+                  className="w-full border rounded px-2 py-1"
+                  value={obsVenta}
+                  onChange={(e) => setObsVenta(e.target.value)}
+                />
+              </div>
+
+              {mode === "edit" && (
+                <div className="md:col-span-3 flex items-center gap-2">
+                  <input
+                    id="propagar"
+                    type="checkbox"
+                    className="h-4 w-4"
+                    checked={propagarEstado}
+                    onChange={(e) => setPropagarEstado(e.target.checked)}
+                  />
+                  <label htmlFor="propagar" className="text-sm">
+                    Propagar estado a cajas vinculadas
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Benefactor + Códigos (solo create + S/40) */}
+            {mode === "create" && (
+              <>
+                {is40 ? (
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                      <label className="text-sm block mb-1">Nombres</label>
+                      <input
+                        className="w-full border rounded px-2 py-1"
+                        value={bf.nombres}
+                        onChange={(e) => setBf((v) => ({ ...v, nombres: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm block mb-1">Apellidos</label>
+                      <input
+                        className="w-full border rounded px-2 py-1"
+                        value={bf.apellidos}
+                        onChange={(e) => setBf((v) => ({ ...v, apellidos: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm block mb-1">Teléfono</label>
+                      <input
+                        className="w-full border rounded px-2 py-1"
+                        value={bf.telefono}
+                        onChange={(e) => setBf((v) => ({ ...v, telefono: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm block mb-1">Correo</label>
+                      <input
+                        className="w-full border rounded px-2 py-1"
+                        value={bf.correo}
+                        onChange={(e) => setBf((v) => ({ ...v, correo: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 p-3 rounded border bg-gray-50 text-sm">
+                    Modalidad S/160: no se asignan cajas ni se capturan datos de benefactor.
+                  </div>
+                )}
+
+                {is40 && (
+                  <div className="mt-4">
+                    <div className="flex items-end gap-2 mb-2">
+                      <div className="flex-1">
+                        <label className="text-sm block mb-1">Código de caja</label>
+                        <input
+                          className="w-full border rounded px-2 py-1"
+                          value={codigo}
+                          onChange={(e) => setCodigo(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && addCodigo()}
+                        />
+                      </div>
+                      <button onClick={addCodigo} className="px-3 py-2 rounded bg-indigo-600 text-white">
+                        Agregar
+                      </button>
+                    </div>
+
+                    <div className="border rounded">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Código</th>
+                            <th className="px-3 py-2 text-left">Estado</th>
+                            <th className="px-3 py-2 text-right">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {items.map((i, idx) => (
+                            <tr key={idx}>
+                              <td className="px-3 py-2">{i.codigo}</td>
+                              <td className="px-3 py-2">
+                                {i.ok ? (
+                                  <span className="text-green-700">OK</span>
+                                ) : (
+                                  <span className="text-red-700">{i.error || "No válida"}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <button
+                                  onClick={() => removeItem(idx)}
+                                  className="text-red-600 hover:underline"
+                                >
+                                  Quitar
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {items.length === 0 && (
+                            <tr>
+                              <td colSpan={3} className="px-3 py-4 text-center text-gray-500">
+                                Sin cajas agregadas
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6 sticky bottom-0 bg-white dark:bg-gray-800 py-2">
+              <button onClick={() => setShowModal(false)} className="px-4 py-2 rounded bg-gray-200">
+                Cancelar
+              </button>
+              <button onClick={handleGrabar} className="px-4 py-2 rounded bg-green-600 text-white">
+                {mode === "create" ? "Guardar" : "Actualizar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
