@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { familiasService, zonasService } from "../services/api";
+import ImportarFamilias from "./ImportarFamilias.jsx";
 import Barcode from "react-barcode";
 import Code128 from "../components/labels/Code128.jsx"; // <-- ajusta la ruta si difiere
 //import BarcodeImg from "../components/labels/BarcodeImg.jsx";
@@ -429,7 +430,7 @@ const Familias = () => {
   const [importZonaId, setImportZonaId] = useState('');
   const [zonas, setZonas] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [showModal, setShowModal] = useState(false);
+  //const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [search, setSearch] = useState("");
   const [zonaId, setZonaId] = useState("");
@@ -453,7 +454,7 @@ const Familias = () => {
   const [showEtiquetas, setShowEtiquetas] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
   const [labelsData, setLabelsData] = useState([]); // familia(s) + integrantes agrupados
-  const labelPrintRef = useRef(null);
+  //const labelPrintRef = useRef(null);
 
   const [isPrinting, setIsPrinting] = useState(false);
 
@@ -957,16 +958,16 @@ const Familias = () => {
         <div className="flex-1" />
 
           <div className="flex gap-2">
-            {/* Nueva Familia */}
+            {/* PRE IMPORTACIÓN */}
             <button
               type="button"
-              onClick={() => { resetForm(); setShowModal(true); }}
+              onClick={() => setShowImportModal(true)}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
-              Nueva Familia
+              PRE IMPORTACIÓN
             </button>
 
-            {/* Importar Excel */}
+            {/* Importar Excel (abre el mismo modal) */}
             <button
               type="button"
               onClick={() => setShowImportModal(true)}
@@ -1207,77 +1208,30 @@ const Familias = () => {
 
 
 
-{showImportModal && (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-    <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-lg">
-      <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-        <h2 className="text-lg font-semibold dark:text-white">Importar Excel de Familias</h2>
-        <button onClick={() => setShowImportModal(false)} className="px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 dark:text-gray-200">✕</button>
-      </div>
+      {/* ===== Modal Importar / PRE IMPORTACIÓN ===== */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-4xl max-h-[92vh] overflow-y-auto">
+            <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h2 className="text-lg font-semibold dark:text-white">
+                Importar Familias (PRE IMPORTACIÓN + Importación)
+              </h2>
+              <button
+                onClick={() => setShowImportModal(false)}
+                className="px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 dark:text-gray-200"
+              >
+                ✕
+              </button>
+            </div>
 
-      <div className="p-5 space-y-4">
-        <div>
-          <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Zona destino</label>
-          <select
-            value={importZonaId}
-            onChange={(e)=>setImportZonaId(e.target.value)}
-            className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
-          >
-            <option value="">Selecciona una zona</option>
-            {zonas.map(z => (<option key={z.id} value={z.id}>{z.nombre}</option>))}
-          </select>
+            <div className="p-5">
+              {/* Aquí vive toda la lógica nueva de PRE IMPORTACIÓN / IMPORTAR EXCEL */}
+              <ImportarFamilias />
+            </div>
+          </div>
         </div>
+      )}
 
-        <div>
-          <label className="block text-sm text-gray-600 dark:text-gray-300 mb-1">Archivo Excel (.xlsx)</label>
-          <input
-            type="file"
-            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            onChange={(e)=>setImportFile(e.target.files?.[0] || null)}
-            className="w-full"
-          />
-        </div>
-
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" onClick={()=>setShowImportModal(false)} className="px-4 py-2 rounded bg-gray-200">
-            Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={importLoading}
-            onClick={async () => {
-              if (!importFile) { alert('Selecciona un archivo .xlsx'); return; }
-              if (!importZonaId) { alert('Selecciona la zona destino'); return; }
-              try {
-                setImportLoading(true);
-                const fd = new FormData();
-                fd.append('archivo', importFile);     // ← nombre de campo correcto
-                fd.append('zona_id', importZonaId);    // ← requerido por backend
-                const r = await familiasService.importExcel(fd); // helper del service
-                if (r?.success) {
-                  setShowImportModal(false);
-                  setImportFile(null);
-                  setImportZonaId('');
-                  await fetchFamilias?.(); // refresca listado si tienes este helper
-                } else {
-                  alert(r?.error || r?.message || 'No se pudo importar.');
-                }
-              } catch (err) {
-                console.error(err);
-                alert('Error de conexión durante la importación.');
-              } finally {
-                setImportLoading(false);
-              }
-            }}
-            className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-60"
-          >
-            {importLoading ? "Importando..." : "Importar"}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
 
 
 
