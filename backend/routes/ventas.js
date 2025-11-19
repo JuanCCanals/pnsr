@@ -106,6 +106,7 @@ router.get('/box/:codigo', authenticateToken, async (req, res) => {
   }
 });
 
+
 // POST /api/ventas → registra venta y actualiza cajas
 router.post('/', authenticateToken, async (req, res) => {
   const conn = await pool.getConnection();
@@ -116,31 +117,107 @@ router.post('/', authenticateToken, async (req, res) => {
     const fecha            = body.fecha;
     const modalidad_id     = body.modalida_id || body.modalidad_id || null;
     const punto_venta_id   = body.punto_venta_id || null;
-    const forma_pago       = body.forma_pago || null;
-    const monto            = Number(body.monto || 0);
+    const forma_pago_body  = body.forma_pago || null;      // forma de pago "principal" (para resumen)
+    const monto_body       = Number(body.monto || 0);      // monto "de referencia"
     const moneda           = body.moneda || 'PEN';
-    const benefactor       = body.benefactor || null;   // { id?, nombres, apellidos, telefono, correo }
+    const benefactor       = body.benefactor || null;      // { id?, nombres, apellidos, telefono, correo }
     const codigos          = Array.isArray(body.codigos) ? body.codigos : [];
 
-    const fecha_operacion  = body.op_fecha || body.fecha_operacion || null;
-    const hora_operacion   = body.op_hora  || body.hora_operacion  || null;
-    const nro_operacion    = body.op_numero|| body.nro_operacion   || null;
-    const observaciones    = body.obs || body.observaciones || null;
-    const fecha_devolucion = body.fecha_devolucion || null;
+    // campos de operación "antiguos" (para compatibilidad y fallback)
+    const fecha_operacion_body = body.op_fecha   || body.fecha_operacion || null;
+    const hora_operacion_body  = body.op_hora    || body.hora_operacion  || null;
+    const nro_operacion_body   = body.op_numero  || body.nro_operacion   || null;
+    const observaciones        = body.obs        || body.observaciones   || null;
+    const fecha_devolucion     = body.fecha_devolucion || null;
+
+    // NUEVO: pagos (si viene array, lo usamos; si no, generamos 1 pago desde los campos antiguos)
+    let pagos = Array.isArray(body.pagos) ? body.pagos : [];
+
+    // Normalizamos y filtramos pagos con monto > 0
+    pagos = pagos.map((p) => ({
+      forma_pago: p.forma_pago || forma_pago_body || 'Efectivo',
+      monto: Number(p.monto || 0),
+      fecha: p.fecha || fecha,
+      fecha_operacion: p.fecha_operacion || p.op_fecha || null,
+      hora_operacion:  p.hora_operacion  || p.op_hora  || null,
+      nro_operacion:   p.nro_operacion   || p.op_numero || null,
+      obs_operacion:   p.obs_operacion   || p.op_obs   || null,
+    })).filter((p) => p.monto > 0);
+
+    // Si no vino array de pagos, generamos uno a partir del payload antiguo (compatibilidad)
+    if (pagos.length === 0 && monto_body > 0) {
+      pagos.push({
+        forma_pago: forma_pago_body || 'Efectivo',
+        monto: monto_body,
+        fecha,
+        fecha_operacion: fecha_operacion_body || null,
+        hora_operacion:  hora_operacion_body || null,
+        nro_operacion:   nro_operacion_body || null,
+        obs_operacion:   observaciones || null,
+      });
+    }
 
     const is40  = Number(modalidad_id) === 1;
     const is160 = Number(modalidad_id) === 2;
 
-    // Requeridos siempre
-    if (!recibo?.trim() || !fecha || !Number(monto) || !Number(modalidad_id) || !Number(punto_venta_id)) {
+    // Requeridos siempre (datos base de la venta)
+    if (!recibo?.trim() || !fecha || !Number(modalidad_id) || !Number(punto_venta_id)) {
       await conn.release();
       return res.status(400).json({
         success: false,
-        error: 'recibo, fecha, monto, modalidad_id y punto_venta_id son obligatorios'
+        error: 'recibo, fecha, modalidad_id y punto_venta_id son obligatorios'
       });
     }
 
-    // Si es S/40, sí exige benefactor + al menos una caja + fecha_devolucion
+    // Debe existir al menos un pago con monto > 0
+    if (pagos.length === 0) {
+      await conn.release();
+      return res.status(400).json({
+        success: false,
+        error: 'Ingrese al menos un pago con monto mayor a 0'
+      });
+    }
+
+    // VALIDACIONES FORMA DE PAGO POR CADA PAGO (Yape/Plin/Transferencia/Interbancario)
+    for (let i = 0; i < pagos.length; i++) {
+      const p = pagos[i];
+      const fpNorm = String(p.forma_pago || '').trim().toLowerCase() || 'efectivo';
+
+      // Efectivo: sin obligación de fecha/hora/número
+      if (fpNorm === 'efectivo') continue;
+
+      // Siempre obligatoria la fecha de operación para pagos no efectivos
+      if (!p.fecha_operacion) {
+        await conn.release();
+        return res.status(400).json({
+          success: false,
+          error: `Ingrese la fecha de operación del pago ${i + 1}`
+        });
+      }
+
+      // Hora NO obligatoria para: Yape, Transferencia, Interbancario
+      const requiereHora = !['yape', 'transferencia', 'interbancario'].includes(fpNorm);
+      // N° de operación NO obligatorio para: Plin
+      const requiereNumero = !['plin'].includes(fpNorm);
+
+      if (requiereHora && !p.hora_operacion) {
+        await conn.release();
+        return res.status(400).json({
+          success: false,
+          error: `Ingrese la hora de operación del pago ${i + 1}`
+        });
+      }
+
+      if (requiereNumero && !String(p.nro_operacion || '').trim()) {
+        await conn.release();
+        return res.status(400).json({
+          success: false,
+          error: `Ingrese el número de operación del pago ${i + 1}`
+        });
+      }
+    }
+
+    // Si es S/40, exige benefactor + al menos una caja + fecha_devolucion
     if (is40) {
       if (!benefactor || !benefactor.nombres?.trim()) {
         await conn.release();
@@ -159,6 +236,21 @@ router.post('/', authenticateToken, async (req, res) => {
     // Estado por defecto según modalidad
     const estadoBody  = body.estado && String(body.estado).trim();
     const estadoFinal = estadoBody || (is40 ? 'Entregada a Benefactor' : 'Asignada');
+
+    // Monto total de la venta = suma de pagos (si hay), si no, el monto_body
+    const totalPagos = pagos.reduce((acc, p) => acc + (Number(p.monto) || 0), 0);
+    const montoVenta = totalPagos > 0 ? totalPagos : monto_body;
+
+    // Forma de pago resumen:
+    let formaPagoResumen = forma_pago_body || null;
+    if (pagos.length > 0) {
+      const distintas = [...new Set(pagos.map(p => (p.forma_pago || '').trim()).filter(Boolean))];
+      if (distintas.length === 1) formaPagoResumen = distintas[0];
+      else if (distintas.length > 1) formaPagoResumen = 'MULTIPLE';
+    }
+
+    // Tomamos la primera operación no nula como resumen en cabecera
+    const pagoResumen = pagos.find(p => p.fecha_operacion || p.hora_operacion || p.nro_operacion) || pagos[0];
 
     await conn.beginTransaction();
 
@@ -223,26 +315,46 @@ router.post('/', authenticateToken, async (req, res) => {
     const [vIns] = await conn.query(
       `INSERT INTO ventas 
         (recibo, fecha, modalidad_id, punto_venta_id, forma_pago, estado, monto, moneda,
-        benefactor_id, fecha_devolucion, observaciones, fecha_operacion, hora_operacion, nro_operacion)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          benefactor_id, fecha_devolucion, observaciones, fecha_operacion, hora_operacion, nro_operacion)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         String(recibo).trim(),
         fecha,
         Number(modalidad_id),
         Number(punto_venta_id),
-        forma_pago || null,
+        formaPagoResumen || null,
         estadoFinal,
-        Number(monto || 0),
+        Number(montoVenta || 0),
         moneda || 'PEN',
-        benefactorId, // 👈 nunca null ahora
+        benefactorId,
         fechaDevol,
         observaciones ? String(observaciones).slice(0, 62) : null,
-        fecha_operacion || null,
-        hora_operacion || null,
-        nro_operacion ? String(nro_operacion).slice(0, 32) : null
+        pagoResumen?.fecha_operacion || null,
+        pagoResumen?.hora_operacion || null,
+        pagoResumen?.nro_operacion ? String(pagoResumen.nro_operacion).slice(0, 32) : null
       ]
     );
     const ventaId = vIns.insertId;
+
+    // Inserta pagos individuales en ventas_pagos
+    for (const p of pagos) {
+      await conn.query(
+        `INSERT INTO ventas_pagos
+          (venta_id, fecha, forma_pago, monto, moneda, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
+          VALUES (?,?,?,?,?,?,?,?,?)`,
+        [
+          ventaId,
+          p.fecha || fecha,
+          p.forma_pago || formaPagoResumen || 'Efectivo',
+          Number(p.monto || 0),
+          moneda || 'PEN',
+          p.fecha_operacion || null,
+          p.hora_operacion || null,
+          p.nro_operacion ? String(p.nro_operacion).slice(0, 32) : null,
+          p.obs_operacion ? String(p.obs_operacion).slice(0, 100) : null
+        ]
+      );
+    }
 
     // Resolver cajas y validar disponibilidad (solo si hay códigos)
     const { resolved: cajasResueltas, missing: faltantes } = await resolveCajasByCodigos(conn, codigos);
@@ -278,7 +390,7 @@ router.post('/', authenticateToken, async (req, res) => {
           modalidad_id,
           punto_venta_id,
           req.user?.id || 1,
-          monto,
+          montoVenta,           // por ahora registramos el total; luego afinamos si quieres prorratear
           moneda,
           fecha,
           'PAGADO'
@@ -311,10 +423,10 @@ router.post('/', authenticateToken, async (req, res) => {
     const msg = e.message?.includes('Duplicate entry')
       ? 'Recibo ya registrado'
       : (e.message || 'Error registrando venta');
-    // 400 para ver el mensaje en Network
     res.status(400).json({ success: false, error: msg });
   }
 });
+
 
 
 

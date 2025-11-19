@@ -45,10 +45,9 @@ export default function Ventas() {
   const [mode, setMode] = useState("create"); // 'create' | 'edit'
   const [editId, setEditId] = useState(null);
   const [propagarEstado, setPropagarEstado] = useState(false);
-  //const [editData, setEditData] = useState(null); // si es edición: { id, ... }
   const [toast, setToast] = useState(null); // {text, type}
 
-  const showToast = (text, type="success") => {
+  const showToast = (text, type = "success") => {
     setToast({ text, type });
     setTimeout(() => setToast(null), 1800);
   };
@@ -59,16 +58,16 @@ export default function Ventas() {
   const [modalidadId, setModalidadId] = useState(null);
   const [monto, setMonto] = useState("40.00");
   const [puntoVentaId, setPuntoVentaId] = useState(null);
+
   const [formaPago, setFormaPago] = useState("Efectivo");
   const [devolucion, setDevolucion] = useState("");
   const [obsVenta, setObsVenta] = useState("");
   const [estadoVenta, setEstadoVenta] = useState("Entregada a Benefactor");
 
-  // operación (solo si formaPago ≠ Efectivo, solo en create)
-  const [opFecha, setOpFecha] = useState("");
-  const [opHora, setOpHora] = useState("");
-  const [opNumero, setOpNumero] = useState("");
-  const [opObs, setOpObs] = useState("");
+  // pagos múltiples por gestión (solo en create se editan)
+  const [pagos, setPagos] = useState([
+    { monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }
+  ]);
 
   // benefactor (solo S/40 al crear)
   const [bf, setBf] = useState({ nombres: "", apellidos: "", telefono: "", correo: "" });
@@ -253,16 +252,13 @@ export default function Ventas() {
     setModalidadId(modalidades[0]?.id || null);
     setPuntoVentaId(puntos[0]?.id || null);
     setFormaPago("Efectivo");
-    setOpFecha("");
-    setOpHora("");
-    setOpNumero("");
-    setOpObs("");
     setDevolucion("");
     setObsVenta("");
     setEstadoVenta("Entregada a Benefactor");
     setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
     setCodigo("");
     setItems([]);
+    setPagos([{ monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
   };
 
   const openCreateModal = () => {
@@ -270,7 +266,6 @@ export default function Ventas() {
     setEditId(null);
     resetModal();
     setShowModal(true);
-
   };
 
   const openEditModal = (r) => {
@@ -279,7 +274,6 @@ export default function Ventas() {
     setMsg({ type: "", text: "" });
 
     setRecibo(r.recibo || "");
-    //setFecha(toYMD(r.fecha) || new Date().toISOString().slice(0, 10));
     setFecha(toYMD(r.fecha) || new Date().toISOString().slice(0, 10));
     setModalidadId(r.modalidad_id || modalidades[0]?.id || null);
     setPuntoVentaId(r.punto_venta_id || puntos[0]?.id || null);
@@ -288,7 +282,7 @@ export default function Ventas() {
     setObsVenta(r.observaciones || "");
     setEstadoVenta(r.estado || "Entregada a Benefactor");
 
-    // edición: no tocamos benefactor ni códigos
+    // edición: no tocamos benefactor ni códigos ni pagos
     setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
     setItems([]);
     setPropagarEstado(false);
@@ -313,100 +307,154 @@ export default function Ventas() {
 
   const removeItem = (idx) => setItems((prev) => prev.filter((_, i) => i !== idx));
 
- // ---------- guardar (create/edit) ----------
-const handleGrabar = async () => {
-  setMsg({ type: "", text: "" });
+  // --- pagos múltiples ---
+  const totalPagos = pagos.reduce((sum, p) => sum + (Number(p.monto) || 0), 0);
 
-  if (mode === "create") {
-    // Validaciones CREATE
-    if (!recibo.trim()) return setMsg({ type: "error", text: "Coloca el No. de recibo" });
+  const addPagoRow = () => {
+    setPagos(prev => [...prev, { monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
+  };
 
-    const codigos = items.filter(i => i.ok).map(i => i.codigo);
-    if (is40 && codigos.length === 0)
-      return setMsg({ type: "error", text: "Agrega al menos una caja válida" });
+  const removePagoRow = (idx) => {
+    setPagos(prev => prev.filter((_, i) => i !== idx));
+  };
 
-    if (is40) {
-      if (!bf.nombres.trim())
-        return setMsg({ type: "error", text: "Ingresa el nombre del benefactor" });
-      if (!devolucion)
-        return setMsg({ type: "error", text: "Ingresa la fecha de devolución" });
-    }
+  const updatePago = (idx, field, value) => {
+    setPagos(prev =>
+      prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
+    );
+  };
 
-    if (formaPago !== "Efectivo") {
-      if (!opFecha || !opHora || !opNumero.trim()) {
-        return setMsg({
-          type: "error",
-          text: "Completa Fecha, Hora y Nº de operación para la forma de pago seleccionada",
-        });
+  // ---------- guardar (create/edit) ----------
+  const handleGrabar = async () => {
+    setMsg({ type: "", text: "" });
+
+    if (mode === "create") {
+      // Validaciones CREATE
+      if (!recibo.trim()) return setMsg({ type: "error", text: "Coloca el No. de recibo" });
+
+      const codigos = items.filter(i => i.ok).map(i => i.codigo);
+      if (is40 && codigos.length === 0)
+        return setMsg({ type: "error", text: "Agrega al menos una caja válida" });
+
+      if (is40) {
+        if (!bf.nombres.trim())
+          return setMsg({ type: "error", text: "Ingresa el nombre del benefactor" });
+        if (!devolucion)
+          return setMsg({ type: "error", text: "Ingresa la fecha de devolución" });
+      }
+
+      // --- pagos múltiples ---
+      const pagosLimpios = pagos
+        .map(p => ({
+          ...p,
+          monto: Number(p.monto || 0),
+        }))
+        .filter(p => p.monto > 0);
+
+      if (pagosLimpios.length === 0) {
+        return setMsg({ type: "error", text: "Ingresa al menos un pago con monto > 0" });
+      }
+
+      if (formaPago !== "Efectivo") {
+        const fp = (formaPago || "").toLowerCase();
+        const requiereHora = !["yape", "transferencia", "interbancario"].includes(fp);
+        const requiereNumero = !["plin"].includes(fp);
+
+        for (const [idx, p] of pagosLimpios.entries()) {
+          if (!p.opFecha) {
+            return setMsg({
+              type: "error",
+              text: `Ingresa la fecha de operación del pago ${idx + 1}`,
+            });
+          }
+          if (requiereHora && !p.opHora) {
+            return setMsg({
+              type: "error",
+              text: `Ingresa la hora de operación del pago ${idx + 1}`,
+            });
+          }
+          if (requiereNumero && !String(p.opNumero || "").trim()) {
+            return setMsg({
+              type: "error",
+              text: `Ingresa el Nº de operación del pago ${idx + 1}`,
+            });
+          }
+        }
+      }
+
+      const pagosPayload = pagosLimpios.map(p => ({
+        forma_pago: formaPago,
+        monto: p.monto,
+        fecha, // usamos la fecha de la venta como fecha del pago
+        fecha_operacion: formaPago !== "Efectivo" ? p.opFecha || null : null,
+        hora_operacion:  formaPago !== "Efectivo" ? p.opHora || null : null,
+        nro_operacion:   formaPago !== "Efectivo"
+          ? (p.opNumero || "").slice(0, 32) || null
+          : null,
+        obs_operacion:   formaPago !== "Efectivo"
+          ? (p.opObs || "").slice(0, 100) || null
+          : null,
+      }));
+
+      const payload = {
+        recibo: recibo.trim(),
+        fecha,
+        modalidad_id: modalidadId,
+        punto_venta_id: puntoVentaId,
+        forma_pago: formaPago || null,
+        estado: estadoVenta || "Entregada a Benefactor",
+        monto: Number(monto || 0),     // monto "de referencia": costo de la(s) caja(s)
+        moneda: "PEN",
+        benefactor: is40 ? bf : null,
+        codigos: is40 ? codigos : [],
+        fecha_devolucion: is40 ? devolucion : null,
+        obs: obsVenta?.slice(0, 62) || null,
+        pagos: pagosPayload,           // 👈 AQUÍ mandamos los pagos múltiples
+      };
+
+      const resp = await ventasService.registrar(payload);
+
+      if (resp?.success) {
+        showToast("Registro guardado", "success");
+        setShowModal(false);
+        // resets mínimos
+        setItems([]);
+        setRecibo("");
+        setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
+        setDevolucion("");
+        setObsVenta("");
+        setPagos([{ monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
+        fetchRows(page || 1);
+      } else {
+        setMsg({ type: "error", text: resp?.error || "No se pudo guardar" });
+      }
+
+    } else {
+      // EDIT
+      const payload = {
+        fecha,
+        modalidad_id: modalidadId,
+        punto_venta_id: puntoVentaId,
+        forma_pago: formaPago || null,
+        estado: estadoVenta || null,
+        fecha_devolucion: devolucion || null,
+        observaciones: obsVenta?.slice(0, 62) || null,
+        propagar_estado_cajas: !!propagarEstado,
+      };
+
+      const resp = await ventasService.update(editId, payload);
+
+      if (resp?.success) {
+        showToast("Gestión actualizada", "success");
+        setShowModal(false);
+        setMode("create");
+        setEditId(null);
+        fetchRows(page || 1);
+      } else {
+        setMsg({ type: "error", text: resp?.error || "No se pudo actualizar" });
       }
     }
-
-    const payload = {
-      recibo: recibo.trim(),
-      fecha,
-      modalidad_id: modalidadId,
-      punto_venta_id: puntoVentaId,
-      forma_pago: formaPago || null,
-      estado: estadoVenta || "Entregada a Benefactor",
-      monto: Number(monto || 0),
-      moneda: "PEN",
-      benefactor: is40 ? bf : null,
-      codigos: is40 ? codigos : [],
-      fecha_devolucion: is40 ? devolucion : null,
-      obs: obsVenta?.slice(0, 62) || null,
-      op_fecha:  formaPago !== "Efectivo" ? opFecha : null,
-      op_hora:   formaPago !== "Efectivo" ? opHora : null,
-      op_numero: formaPago !== "Efectivo" ? opNumero?.slice(0, 32) : null,
-      op_obs:    formaPago !== "Efectivo" ? opObs?.slice(0, 32) : null,
-    };
-
-    const resp = await ventasService.registrar(payload);
-
-    if (resp?.success) {
-      showToast("Registro guardado", "success");
-      setShowModal(false);
-      // resets mínimos
-      setItems([]);
-      setRecibo("");
-      setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
-      setDevolucion("");
-      setObsVenta("");
-      setOpFecha("");
-      setOpHora("");
-      setOpNumero("");
-      setOpObs("");
-      fetchRows(page || 1);
-    } else {
-      setMsg({ type: "error", text: resp?.error || "No se pudo guardar" });
-    }
-
-  } else {
-    // EDIT
-    const payload = {
-      fecha,
-      modalidad_id: modalidadId,
-      punto_venta_id: puntoVentaId,
-      forma_pago: formaPago || null,
-      estado: estadoVenta || null,
-      fecha_devolucion: devolucion || null,
-      observaciones: obsVenta?.slice(0, 62) || null,
-      propagar_estado_cajas: !!propagarEstado,
-    };
-
-    const resp = await ventasService.update(editId, payload);
-
-    if (resp?.success) {
-      showToast("Gestión actualizada", "success");
-      setShowModal(false);
-      setMode("create");
-      setEditId(null);
-      fetchRows(page || 1);
-    } else {
-      setMsg({ type: "error", text: resp?.error || "No se pudo actualizar" });
-    }
-  }
-};
-
+  };
 
   // ---------- Render ----------
   return (
@@ -571,12 +619,12 @@ const handleGrabar = async () => {
                       </span>
                     </td>
                     <td className="px-5 py-3 whitespace-nowrap">
-                    <button
-                      className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
-                      onClick={() => openEditModal(r)}
-                    >
-                      Modificar
-                    </button>
+                      <button
+                        className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
+                        onClick={() => openEditModal(r)}
+                      >
+                        Modificar
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -722,48 +770,107 @@ const handleGrabar = async () => {
                 </select>
               </div>
 
-              {/* Detalle de depósito (solo al crear y si forma de pago no es Efectivo) */}
-              {mode === "create" && formaPago !== "Efectivo" && (
-                <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div>
-                    <label className="text-sm block mb-1">Fecha depósito</label>
-                    <input
-                      type="date"
-                      className="w-full border rounded px-2 py-1"
-                      value={opFecha}
-                      onChange={(e) => setOpFecha(e.target.value)}
-                    />
+              {/* Pagos (uno o varios) */}
+              {mode === "create" && (
+                <div className="md:col-span-3 mt-2 border rounded p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold">
+                      Pagos registrados
+                    </span>
+                    <span className="text-xs text-gray-600">
+                      Total pagos: S/ {totalPagos.toFixed(2)} | Monto referencia: S/ {Number(monto || 0).toFixed(2)}
+                    </span>
                   </div>
-                  <div>
-                    <label className="text-sm block mb-1">Hora depósito</label>
-                    <input
-                      type="time"
-                      className="w-full border rounded px-2 py-1"
-                      value={opHora}
-                      onChange={(e) => setOpHora(e.target.value)}
-                    />
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-2 py-1 text-left">Monto</th>
+                          {formaPago !== "Efectivo" && (
+                            <>
+                              <th className="px-2 py-1 text-left">Fec. operación</th>
+                              <th className="px-2 py-1 text-left">Hora</th>
+                              <th className="px-2 py-1 text-left">Nº operación</th>
+                              <th className="px-2 py-1 text-left">Obs.</th>
+                            </>
+                          )}
+                          <th className="px-2 py-1 text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {pagos.map((p, idx) => (
+                          <tr key={idx}>
+                            <td className="px-2 py-1">
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="w-full border rounded px-1 py-0.5"
+                                value={p.monto}
+                                onChange={(e) => updatePago(idx, "monto", e.target.value)}
+                              />
+                            </td>
+                            {formaPago !== "Efectivo" && (
+                              <>
+                                <td className="px-2 py-1">
+                                  <input
+                                    type="date"
+                                    className="w-full border rounded px-1 py-0.5"
+                                    value={p.opFecha}
+                                    onChange={(e) => updatePago(idx, "opFecha", e.target.value)}
+                                  />
+                                </td>
+                                <td className="px-2 py-1">
+                                  <input
+                                    type="time"
+                                    className="w-full border rounded px-1 py-0.5"
+                                    value={p.opHora}
+                                    onChange={(e) => updatePago(idx, "opHora", e.target.value)}
+                                  />
+                                </td>
+                                <td className="px-2 py-1">
+                                  <input
+                                    maxLength={32}
+                                    className="w-full border rounded px-1 py-0.5"
+                                    value={p.opNumero}
+                                    onChange={(e) => updatePago(idx, "opNumero", e.target.value)}
+                                  />
+                                </td>
+                                <td className="px-2 py-1">
+                                  <input
+                                    maxLength={100}
+                                    className="w-full border rounded px-1 py-0.5"
+                                    value={p.opObs}
+                                    onChange={(e) => updatePago(idx, "opObs", e.target.value)}
+                                  />
+                                </td>
+                              </>
+                            )}
+                            <td className="px-2 py-1 text-right">
+                              <button
+                                type="button"
+                                className="text-xs text-red-600 hover:underline"
+                                onClick={() => removePagoRow(idx)}
+                                disabled={pagos.length === 1}
+                              >
+                                Quitar
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <div>
-                    <label className="text-sm block mb-1">Nº depósito</label>
-                    <input
-                      maxLength={32}
-                      className="w-full border rounded px-2 py-1"
-                      value={opNumero}
-                      onChange={(e) => setOpNumero(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm block mb-1">Obs. depósito</label>
-                    <input
-                      maxLength={32}
-                      className="w-full border rounded px-2 py-1"
-                      value={opObs}
-                      onChange={(e) => setOpObs(e.target.value)}
-                    />
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="px-3 py-1 text-xs rounded bg-indigo-600 text-white"
+                      onClick={addPagoRow}
+                    >
+                      + Agregar pago
+                    </button>
                   </div>
                 </div>
               )}
-
 
               {/* Fecha de devolución: solo S/40 */}
               {is40 && (
