@@ -86,7 +86,7 @@ function App() {
                 }
               />
               <Route
-                path="cobros"
+                path="registrar-servicios"
                 element={
                   <ProtectedRoute requiredRole={['admin', 'operador']} requiredPerm="ingresos">
                     <Cobros />

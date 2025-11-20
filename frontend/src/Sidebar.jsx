@@ -24,7 +24,7 @@ const Menus = [
   { title: 'Gestión',       src: Folder, path: '/gestion',       roles: ['admin', 'operador', 'consulta'], perm: 'venta_cajas' },
   { title: 'Registrar Donaciones', src: Folder, path: '/donaciones', roles: ['admin', 'operador'], perm: 'ingresos' },
   { title: 'Servicios', src: Folder, path: '/servicios', roles: ['admin', 'operador'], perm: 'servicios' }, // crea el perm si lo usarás
-  { title: 'Cobros', src: Calendar, path: '/cobros', roles: ['admin', 'operador'], perm: 'ingresos' },
+  { title: 'Registrar Servicios', src: Calendar, path: '/registrar-servicios', roles: ['admin', 'operador'], perm: 'ingresos' },
   { title: 'Comprobantes', src: Folder, path: '/comprobantes', roles: ['admin', 'operador', 'consulta'] }, // sin perm
   { title: 'Reportes', src: Chart, path: '/reportes', roles: ['admin', 'operador', 'consulta'], perm: 'reportes' },
   { title: 'Usuarios', src: User, path: '/usuarios', roles: ['admin'], perm: 'usuarios' }, // admin + (opcional) perm
