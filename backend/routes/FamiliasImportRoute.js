@@ -452,6 +452,31 @@ router.post('/', auth, uploadExcelGate, async (req, res) => {
           familiasInsertadas++;
         }
 
+        // === Asegurar caja asociada a la familia ===
+        const [cajas] = await conn.query(
+          'SELECT id, codigo, estado FROM cajas WHERE familia_id = ? LIMIT 1',
+          [familia_id]
+        );
+
+        if (cajas.length) {
+          const caja = cajas[0];
+          const nuevoCodigo = caja.codigo || codigo_unico;
+          const nuevoEstado = caja.estado || 'disponible';
+
+          if (nuevoCodigo !== caja.codigo || nuevoEstado !== caja.estado) {
+            await conn.query(
+              'UPDATE cajas SET codigo = ?, estado = ? WHERE id = ?',
+              [nuevoCodigo, nuevoEstado, caja.id]
+            );
+          }
+        } else {
+          await conn.query(
+            'INSERT INTO cajas (codigo, familia_id, estado) VALUES (?,?,?)',
+            [codigo_unico, familia_id, 'disponible']
+          );
+        }
+        // === FIN asegurar caja ===
+
         // Integrantes (hijos/hijas/otros)
         for (const it of integrantes) {
           await conn.query(

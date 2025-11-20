@@ -325,12 +325,14 @@ export default function Ventas() {
   };
 
   // ---------- guardar (create/edit) ----------
+  // ---------- guardar (create/edit) ----------
   const handleGrabar = async () => {
     setMsg({ type: "", text: "" });
 
     if (mode === "create") {
       // Validaciones CREATE
-      if (!recibo.trim()) return setMsg({ type: "error", text: "Coloca el No. de recibo" });
+      if (!recibo.trim())
+        return setMsg({ type: "error", text: "Coloca el No. de recibo" });
 
       const codigos = items.filter(i => i.ok).map(i => i.codigo);
       if (is40 && codigos.length === 0)
@@ -412,25 +414,50 @@ export default function Ventas() {
         pagos: pagosPayload,           // 👈 AQUÍ mandamos los pagos múltiples
       };
 
-      const resp = await ventasService.registrar(payload);
-
-      if (resp?.success) {
-        showToast("Registro guardado", "success");
-        setShowModal(false);
-        // resets mínimos
-        setItems([]);
-        setRecibo("");
-        setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
-        setDevolucion("");
-        setObsVenta("");
-        setPagos([{ monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
-        fetchRows(page || 1);
-      } else {
-        setMsg({ type: "error", text: resp?.error || "No se pudo guardar" });
+      try {
+        const resp = await ventasService.registrar(payload);
+      
+        if (resp?.success) {
+          showToast("Registro guardado", "success");
+          setShowModal(false);
+          // resets mínimos
+          setItems([]);
+          setRecibo("");
+          setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
+          setDevolucion("");
+          setObsVenta("");
+          setPagos([{ monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
+          fetchRows(page || 1);
+        } else {
+          const errorTxt = resp?.error || "Ocurrió un error al registrar la venta";
+          const finalTxt = errorTxt.includes("Recibo ya registrado")
+            ? "Recibo ya registrado"
+            : errorTxt;
+      
+          // ⬇️ mensaje en el modal
+          setMsg({ type: "error", text: finalTxt });
+          // ⬇️ toast global
+          showToast(finalTxt, "error");
+        }
+      } catch (err) {
+        const apiError =
+          err?.response?.data?.error ||
+          err?.message ||
+          "Ocurrió un error al registrar la venta";
+      
+        const finalTxt = apiError.includes("Recibo ya registrado")
+          ? "Recibo ya registrado"
+          : `Ocurrió un error al registrar la venta: ${apiError}`;
+      
+        // ⬇️ mensaje en el modal
+        setMsg({ type: "error", text: finalTxt });
+        // ⬇️ toast global
+        showToast(finalTxt, "error");
       }
+      
 
     } else {
-      // EDIT
+      // EDIT (esta parte la puedes dejar como ya la tienes)
       const payload = {
         fecha,
         modalidad_id: modalidadId,
@@ -455,6 +482,7 @@ export default function Ventas() {
       }
     }
   };
+
 
   // ---------- Render ----------
   return (
