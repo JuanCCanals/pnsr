@@ -5,4 +5,119 @@
 @media print {
   .no-print { display: none !important; }
   .print\:break-inside-avoid { break-inside: avoid; }
+}/* frontend/src/index.css - Agregar estos estilos globales para mejor responsividad */
+
+/* Asegurar que el scrollbar del sidebar no afecte el layout */
+.sidebar-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scrollable::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, 0.5);
+  border-radius: 3px;
+}
+
+.sidebar-scrollable::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.8);
+}
+
+/* Mejorar tablas en móvil */
+@media (max-width: 768px) {
+  table {
+    font-size: 0.875rem;
+  }
+
+  table th,
+  table td {
+    padding: 0.5rem 0.25rem;
+  }
+
+  /* Permitir scroll horizontal en tablas si es necesario */
+  .table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Mejorar formularios en móvil */
+@media (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* Prevenir zoom en iOS */
+  }
+
+  .form-group {
+    margin-bottom: 1rem;
+  }
+}
+
+/* Asegurar que los botones sean tocables en móvil */
+@media (max-width: 768px) {
+  button,
+  a.button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.75rem 1rem;
+  }
+}
+
+/* Mejorar modales en móvil */
+@media (max-width: 768px) {
+  .modal {
+    width: 95vw;
+    max-width: 95vw;
+  }
+
+  .modal-content {
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+}
+
+/* Asegurar que el contenido principal tenga padding adecuado */
+main {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(107, 114, 128, 0.5) transparent;
+}
+
+main::-webkit-scrollbar {
+  width: 8px;
+}
+
+main::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+main::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, 0.5);
+  border-radius: 4px;
+}
+
+main::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.8);
+}
+
+/* Prevenir que los elementos se corten en pantallas pequeñas */
+@media (max-width: 640px) {
+  .container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+  }
 }

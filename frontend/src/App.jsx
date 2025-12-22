@@ -20,6 +20,7 @@ import Servicios from './pages/Servicios';
 import Cobros from './pages/Cobros';
 import Comprobantes from './pages/Comprobantes';
 import Reportes from './pages/Reportes';
+import Integracion from './pages/Integracion';
 import Usuarios from './pages/Usuarios';
 import Configuracion from './pages/Configuracion';
 import TestPage from './pages/TestPage';
@@ -85,19 +86,45 @@ function App() {
                   </ProtectedRoute>
                 }
               />
+
               <Route
                 path="registrar-servicios"
                 element={
-                  <ProtectedRoute requiredRole={['admin', 'operador']} requiredPerm="ingresos">
+                  <ProtectedRoute
+                    requiredRole={['admin', 'consulta']}
+                    requiredPerm={['registrar-servicios']}
+                  >
                     <Cobros />
                   </ProtectedRoute>
                 }
               />
+
+              {/* Servicios y Comprobantes por ahora solo por rol para no romper si no existe el permiso */}
+              <Route
+                path="servicios"
+                element={
+                  <ProtectedRoute
+                    requiredRole={['admin', 'consulta']}
+                    requiredPerm="servicios"
+                  >
+                    <Servicios />
+                  </ProtectedRoute>
+                }
+              />
+
               <Route
                 path="reportes"
                 element={
                   <ProtectedRoute requiredPerm="reportes">
                     <Reportes />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="integracion"
+                element={
+                  <ProtectedRoute requiredPerm={['servicios', 'venta_cajas']}>
+                    <Integracion />
                   </ProtectedRoute>
                 }
               />
@@ -109,7 +136,7 @@ function App() {
               <Route
                 path="donaciones"
                 element={
-                  <ProtectedRoute requiredRole={['admin', 'operador']}>
+                  <ProtectedRoute requiredRole={['admin', 'supervisor' , 'operador']}>
                     <Donaciones />
                   </ProtectedRoute>
                 }
@@ -118,11 +145,16 @@ function App() {
               <Route
                 path="servicios"
                 element={
-                  <ProtectedRoute requiredRole={['admin', 'operador']}>
+                  <ProtectedRoute
+                    requiredRole={['admin', 'consulta']}
+                    requiredPerm="servicios"
+                  >
                     <Servicios />
                   </ProtectedRoute>
                 }
               />
+
+
               <Route path="comprobantes" element={<Comprobantes />} />
 
               {/* Usuarios / Configuración: solo admin por rol */}

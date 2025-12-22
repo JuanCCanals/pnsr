@@ -64,6 +64,8 @@ export default function Ventas() {
   const [obsVenta, setObsVenta] = useState("");
   const [estadoVenta, setEstadoVenta] = useState("Entregada a Benefactor");
 
+  const [saldoExcedente, setSaldoExcedente] = useState(0);
+
   // pagos múltiples por gestión (solo en create se editan)
   const [pagos, setPagos] = useState([
     { monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }
@@ -155,6 +157,24 @@ export default function Ventas() {
       setLoading(false);
     }
   }
+
+    // Consultar excedente cuando cambia el teléfono del benefactor
+    useEffect(() => {
+      if (!is160 || mode !== "create") {
+        setSaldoExcedente(0);
+        return;
+      }
+    
+      (async () => {
+        try {
+          const r = await ventasService.getSaldoExcedentes();
+          if (r?.success) setSaldoExcedente(Number(r.saldo || 0));
+          else setSaldoExcedente(0);
+        } catch {
+          setSaldoExcedente(0);
+        }
+      })();
+    }, [is160, mode]);
 
   // ---------- export ----------
   async function downloadExcel(filename, rows) {
@@ -325,11 +345,27 @@ export default function Ventas() {
   };
 
   // ---------- guardar (create/edit) ----------
-  // ---------- guardar (create/edit) ----------
   const handleGrabar = async () => {
     setMsg({ type: "", text: "" });
 
     if (mode === "create") {
+          // Si paga con excedente, solo aplica a modalidad S/160 y debe haber saldo suficiente
+          if (formaPago === "Con excedente") {
+            if (!is160) {
+              return setMsg({
+                type: "error",
+                text: "El pago con excedente solo aplica a cajas de S/ 160.",
+              });
+            }
+
+            if (saldoExcedente < 160) {
+              return setMsg({
+                type: "error",
+                text: `El saldo de excedentes (S/ ${saldoExcedente.toFixed(2)}) no alcanza para pagar una caja de S/ 160.`,
+              });
+            }
+          }
+
       // Validaciones CREATE
       if (!recibo.trim())
         return setMsg({ type: "error", text: "Coloca el No. de recibo" });
@@ -345,41 +381,47 @@ export default function Ventas() {
           return setMsg({ type: "error", text: "Ingresa la fecha de devolución" });
       }
 
+      //////////////////
       // --- pagos múltiples ---
-      const pagosLimpios = pagos
+      let pagosLimpios = pagos
         .map(p => ({
           ...p,
           monto: Number(p.monto || 0),
         }))
         .filter(p => p.monto > 0);
 
-      if (pagosLimpios.length === 0) {
-        return setMsg({ type: "error", text: "Ingresa al menos un pago con monto > 0" });
-      }
+      if (formaPago === "Con excedente") {
+        // Con excedente: no se envían pagos al backend
+        pagosLimpios = [];
+      } else {
+        if (pagosLimpios.length === 0) {
+          return setMsg({ type: "error", text: "Ingresa al menos un pago con monto > 0" });
+        }
 
-      if (formaPago !== "Efectivo") {
-        const fp = (formaPago || "").toLowerCase();
-        const requiereHora = !["yape", "transferencia", "interbancario"].includes(fp);
-        const requiereNumero = !["plin"].includes(fp);
+        if (formaPago !== "Efectivo") {
+          const fp = (formaPago || "").toLowerCase();
+          const requiereHora = !["yape", "transferencia", "interbancario"].includes(fp);
+          const requiereNumero = !["plin"].includes(fp);
 
-        for (const [idx, p] of pagosLimpios.entries()) {
-          if (!p.opFecha) {
-            return setMsg({
-              type: "error",
-              text: `Ingresa la fecha de operación del pago ${idx + 1}`,
-            });
-          }
-          if (requiereHora && !p.opHora) {
-            return setMsg({
-              type: "error",
-              text: `Ingresa la hora de operación del pago ${idx + 1}`,
-            });
-          }
-          if (requiereNumero && !String(p.opNumero || "").trim()) {
-            return setMsg({
-              type: "error",
-              text: `Ingresa el Nº de operación del pago ${idx + 1}`,
-            });
+          for (const [idx, p] of pagosLimpios.entries()) {
+            if (!p.opFecha) {
+              return setMsg({
+                type: "error",
+                text: `Ingresa la fecha de operación del pago ${idx + 1}`,
+              });
+            }
+            if (requiereHora && !p.opHora) {
+              return setMsg({
+                type: "error",
+                text: `Ingresa la hora de operación del pago ${idx + 1}`,
+              });
+            }
+            if (requiereNumero && !String(p.opNumero || "").trim()) {
+              return setMsg({
+                type: "error",
+                text: `Ingresa el Nº de operación del pago ${idx + 1}`,
+              });
+            }
           }
         }
       }
@@ -397,6 +439,8 @@ export default function Ventas() {
           ? (p.opObs || "").slice(0, 100) || null
           : null,
       }));
+      ///////////
+
 
       const payload = {
         recibo: recibo.trim(),
@@ -483,6 +527,18 @@ export default function Ventas() {
     }
   };
 
+  const prettyEstado = (estado) => {
+    if (!estado) return "—";
+    switch (estado) {
+      case "Devuelta":
+        return "Devuelta por Benefactor";
+      case "Asignada":
+        return "Asignada (caja S/160)";
+      default:
+        return estado;
+    }
+  };
+
 
   // ---------- Render ----------
   return (
@@ -560,6 +616,7 @@ export default function Ventas() {
           <option>Plin</option>
           <option>Transferencia</option>
           <option>Interbancario</option>
+          <option>Con excedente</option>
         </select>
 
         <input
@@ -633,6 +690,7 @@ export default function Ventas() {
                   </td>
                 </tr>
               )}
+              
               {!loading &&
                 rows.map((r, idx) => (
                   <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
@@ -641,11 +699,13 @@ export default function Ventas() {
                     <td className="px-5 py-3">{r.benefactor_nombre || ""}</td>
                     <td className="px-5 py-3">{r.codigos || ""}</td>
                     <td className="px-5 py-3 whitespace-nowrap">{toYMD(r.fecha_devolucion) || "—"}</td>
+
                     <td className="px-5 py-3 whitespace-nowrap">
                       <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
-                        {r.estado || "—"}
+                        {prettyEstado(r.estado)}
                       </span>
                     </td>
+
                     <td className="px-5 py-3 whitespace-nowrap">
                       <button
                         className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
@@ -741,14 +801,33 @@ export default function Ventas() {
                   className="w-full border rounded px-2 py-1"
                   value={estadoVenta}
                   onChange={(e) => setEstadoVenta(e.target.value)}
-                  disabled={mode === "create" && is160}   // 👈 bloquea en S/160 al crear
-                  title={mode === "create" && is160 ? "Estado fijado en 'Asignada' para modalidad S/160" : undefined}
+                  disabled={mode === "create" && is160}   // 👈 sigue bloqueando S/160 al crear
+                  title={mode === "create" && is160
+                    ? "Estado fijado en 'Asignada' para modalidad S/160"
+                    : undefined}
                 >
-                  <option>Entregada a Benefactor</option>
-                  <option>Asignada</option>
-                  <option>Devuelta</option>
+                  {/* Entregada a benefactor (venta S/40 normal) */}
+                  <option value="Entregada a Benefactor">
+                    Entregada a Benefactor
+                  </option>
+
+                  {/* Devuelta por benefactor (seguimos usando 'Devuelta' internamente) */}
+                  <option value="Devuelta">
+                    Devuelta por Benefactor
+                  </option>
+
+                  {/* Nuevo estado: Entregada a familia */}
+                  <option value="Entregada a Familia">
+                    Entregada a Familia
+                  </option>
+
+                  {/* Asignada (cajas de S/160, sin caja física) */}
+                  <option value="Asignada">
+                    Asignada (caja S/160)
+                  </option>
                 </select>
               </div>
+
 
               <div>
                 <label className="text-sm block mb-1">Modalidad</label>
@@ -795,11 +874,15 @@ export default function Ventas() {
                   <option>Plin</option>
                   <option>Transferencia</option>
                   <option>Interbancario</option>
+
+                  {/* Solo mostrar cuando modalidad sea S/160 */}
+                  {is160 && <option>Con excedente</option>}
                 </select>
+
               </div>
 
               {/* Pagos (uno o varios) */}
-              {mode === "create" && (
+              {mode === "create" && formaPago !== "Con excedente" && (
                 <div className="md:col-span-3 mt-2 border rounded p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-semibold">
@@ -814,7 +897,7 @@ export default function Ventas() {
                       <thead className="bg-gray-50">
                         <tr>
                           <th className="px-2 py-1 text-left">Monto</th>
-                          {formaPago !== "Efectivo" && (
+                          {formaPago !== "Efectivo" && formaPago !== "Con excedente" && (
                             <>
                               <th className="px-2 py-1 text-left">Fec. operación</th>
                               <th className="px-2 py-1 text-left">Hora</th>
@@ -837,7 +920,8 @@ export default function Ventas() {
                                 onChange={(e) => updatePago(idx, "monto", e.target.value)}
                               />
                             </td>
-                            {formaPago !== "Efectivo" && (
+                            
+                            {formaPago !== "Efectivo" && formaPago !== "Con excedente" &&(
                               <>
                                 <td className="px-2 py-1">
                                   <input
@@ -873,6 +957,7 @@ export default function Ventas() {
                                 </td>
                               </>
                             )}
+                            
                             <td className="px-2 py-1 text-right">
                               <button
                                 type="button"
@@ -899,6 +984,8 @@ export default function Ventas() {
                   </div>
                 </div>
               )}
+
+
 
               {/* Fecha de devolución: solo S/40 */}
               {is40 && (
@@ -942,6 +1029,14 @@ export default function Ventas() {
             {/* Benefactor + Códigos (solo create + S/40) */}
             {mode === "create" && (
               <>
+
+                {/* Mostrar saldo de excedente (solo S/160 + crear) */}
+                {mode === "create" && is160 && saldoExcedente > -1 && (
+                  <div className="md:col-span-3 mt-2 p-3 rounded bg-yellow-50 border text-sm text-gray-800">
+                    <strong>Saldo excedente disponible:</strong> S/ {saldoExcedente.toFixed(2)}
+                  </div>
+                )}
+
                 {is40 ? (
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>

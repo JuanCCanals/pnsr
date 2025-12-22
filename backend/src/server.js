@@ -11,8 +11,14 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // const benefactoresRoutes = require('../routes/benefactores');
-const ventasRoutes = require('../routes/ventas');
-const catalogosRoutes = require('../routes/catalogos');
+const ventasRoutes = require("../routes/ventas");
+const catalogosRoutes = require("../routes/catalogos");
+const permisosRoutes = require("../routes/permisos");
+const dashboardRoutes = require("../routes/dashboard");
+const reportesRoutes = require("../routes/reportes");
+const integracionRoutes = require("../routes/integracion");
+const excedentesRoute   = require('../routes/excedentes'); // NUEVO
+const comprobantesRoute = require("../routes/comprobantes"); // 👈 NUEVO
 
 const DEMO = process.env.DEMO_MODE === 'true';
 if (DEMO) console.warn('⚠️ DEMO_MODE ENABLED: auth bypassed for demo purposes');
@@ -41,6 +47,86 @@ app.get('/api/ping', (_req, res) => {
   res.send('pong');
 });
 
+
+// === Configuración de ROLES y sus módulos permitidos ===
+// IMPORTANTE: asegúrate que estos nombres coincidan con el campo `modulo` de tu tabla `permisos`
+// y con los módulos del Sidebar.
+const ROLE_MODULES = {
+  admin: [
+    '*', // admin ve todo
+  ],
+  supervisor: [
+    'dashboard',
+    'familias',
+    'cajas',
+    'ventas',
+    'reportes',
+    'servicios',
+  ],
+  operador_campanias: [
+    'dashboard',
+    'zonas',
+    'familias',
+    'cajas',
+    'ventas',
+    'reportes',
+  ],
+  operador_servicios: [
+    'dashboard',
+    'servicios',
+    'reportes',
+  ],
+};
+
+/**
+ * Asigna permisos a un usuario según su rol.
+ * Si el rol es 'admin' → se le asignan TODOS los permisos activos.
+ * Si el rol es otro → se le asignan solo los permisos cuyo `modulo` está en ROLE_MODULES[rol].
+ */
+async function assignPermissionsByRole(usuarioId, rol) {
+  if (!usuarioId || !rol) return;
+
+  // Limpia permisos actuales
+  await pool.execute(
+    'DELETE FROM usuario_permisos WHERE usuario_id = ?',
+    [usuarioId]
+  );
+
+  // Admin: todos los permisos activos
+  if (rol === 'admin') {
+    const [allPerms] = await pool.execute(
+      'SELECT id FROM permisos WHERE activo = 1'
+    );
+    if (!allPerms.length) return;
+
+    const values = allPerms.map(p => [usuarioId, p.id]);
+    await pool.query(
+      'INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES ?',
+      [values]
+    );
+    return;
+  }
+
+  // Otros roles: según módulos definidos
+  const modules = ROLE_MODULES[rol] || [];
+  if (!modules.length) return;
+
+  const placeholders = modules.map(() => '?').join(',');
+  const [rows] = await pool.execute(
+    `SELECT id FROM permisos WHERE activo = 1 AND modulo IN (${placeholders})`,
+    modules
+  );
+
+  if (!rows.length) return;
+
+  const values = rows.map(p => [usuarioId, p.id]);
+  await pool.query(
+    'INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES ?',
+    [values]
+  );
+}
+
+
 app.use((req, res, next) => {
   const url = req.originalUrl || req.url || req.path || '';
   if (PUBLIC_PATHS.some(p => url.startsWith(p))) {
@@ -51,7 +137,19 @@ app.use((req, res, next) => {
 
 app.use('/api/benefactores', ventasRoutes); // alias “amistoso” para el cliente
 app.use('/api/ventas', ventasRoutes);       // alias técnico (opcional, útil si ya lo usabas)
-app.use('/api/catalogos', catalogosRoutes);
+app.use("/api/catalogos", catalogosRoutes);
+app.use("/api/permisos", permisosRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/reportes", reportesRoutes);
+app.use("/api/integracion", integracionRoutes);
+
+app.use('/api/permisos', permisosRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/reportes', reportesRoutes);
+
+app.use('/api/excedentes', excedentesRoute);
+
+app.use("/api/comprobantes", comprobantesRoute); // 👈 NUEVO
 // ==========================================
 
 
@@ -388,14 +486,9 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
     const usuarioId = result.insertId;
 
     // Asignar permisos si se proporcionaron
-    if (permisos && Array.isArray(permisos)) {
-      for (let permisoId of permisos) {
-        await pool.execute(
-          'INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES (?, ?)',
-          [usuarioId, permisoId]
-        );
-      }
-    }
+    // Asignar permisos según rol (ignoramos los permisos manuales aquí)
+    await assignPermissionsByRole(usuarioId, rol || 'operador_campanias');
+
 
     res.status(201).json({
       success: true,
@@ -403,7 +496,7 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
         id: usuarioId,
         nombre: nombre.trim(),
         email: email.toLowerCase(),
-        rol: rol || 'operador',
+        rol: rol || 'operador_campanias',
         activo: activo !== false
       },
       message: 'Usuario creado exitosamente'
@@ -508,21 +601,11 @@ app.put('/api/usuarios/:id', authenticateToken, async (req, res) => {
     }
 
     // Actualizar permisos si se proporcionaron
-    if (permisos && Array.isArray(permisos)) {
-      // Eliminar permisos existentes
-      await pool.execute(
-        'DELETE FROM usuario_permisos WHERE usuario_id = ?',
-        [id]
-      );
-
-      // Insertar nuevos permisos
-      for (let permisoId of permisos) {
-        await pool.execute(
-          'INSERT INTO usuario_permisos (usuario_id, permiso_id) VALUES (?, ?)',
-          [id, permisoId]
-        );
-      }
+    // Si cambiaste de rol, reasigna permisos automáticamente según el nuevo rol
+    if (rol) {
+      await assignPermissionsByRole(id, rol);
     }
+
 
     res.json({
       success: true,
@@ -674,8 +757,8 @@ const cajasRoutes           = require('../routes/cajas');
 const campaniasRoute        = require('../routes/CampaniasRoute');
 const modalidadesRoute      = require('../routes/ModalidadesRoute');
 const puntosVentaRoute      = require('../routes/PuntosVentaRoute');
-const reportesRoutes        = require('../routes/reportes');
-const dashboardRoute        = require('../routes/DashboardRoute');
+
+
 const tiposServicioRoute    = require('../routes/tipos-servicio');
 
 // Rutas nuevas/actualizadas que agregamos en esta iteración
@@ -700,8 +783,8 @@ app.use('/api/servicios',          serviciosRoute);
 app.use('/api/cobros',             cobrosRoute);
 app.use('/api/ventas',             ventasRoute);
 
-app.use('/api/reportes', reportesRoutes);
-app.use('/api/dashboard', require('../routes/DashboardRoute'));
+
+
 
 // ==================== SERVIDOR ====================
 
