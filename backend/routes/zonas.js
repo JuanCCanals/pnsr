@@ -1,52 +1,14 @@
+// backend/routes/zonas.js
 const express = require('express');
 const router = express.Router();
-
-// Función para obtener el pool de conexiones desde el servidor principal
-const getPool = () => {
-  const mysql = require('mysql2/promise');
-  const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pnsr_db',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-  };
-  return mysql.createPool(dbConfig);
-};
-
-const pool = getPool();
-
-// Middleware de autenticación (simplificado para este módulo)
-const authenticateToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Token de acceso requerido'
-      });
-    }
-
-    // Aquí iría la verificación del JWT
-    // Por ahora, asumimos que el token es válido
-    req.user = { id: 1, rol: 'admin' }; // Mock user
-    next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      error: 'Token inválido'
-    });
-  }
-};
+const pool = require('../config/db'); // ✅ Usar pool centralizado
+const authenticateToken = require('../middlewares/auth'); // ✅ Usar middleware centralizado
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // ==================== RUTAS DE ZONAS ====================
 
 // Obtener todas las zonas
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('zonas'), async (req, res) => {
   try {
     const [rows] = await pool.execute(`
       SELECT 
@@ -79,7 +41,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Obtener estadísticas de zonas
-router.get('/stats', authenticateToken, async (req, res) => {
+router.get('/stats', authenticateToken, authorizePermission('zonas'), async (req, res) => {
   try {
     const [totalRows] = await pool.execute('SELECT COUNT(*) as total FROM zonas');
     const [activasRows] = await pool.execute('SELECT COUNT(*) as activas FROM zonas WHERE activo = 1');
@@ -115,7 +77,7 @@ router.get('/stats', authenticateToken, async (req, res) => {
 });
 
 // Obtener una zona por ID
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('zonas'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -150,7 +112,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Crear nueva zona
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('zonas.crear'), async (req, res) => {
   try {
     const { nombre, descripcion, abreviatura, activo } = req.body;
 
@@ -213,7 +175,7 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // Actualizar zona
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('zonas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre, descripcion, abreviatura, activo } = req.body;
@@ -308,7 +270,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 });
 
 // Cambiar estado de zona (activar/desactivar)
-router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
+router.patch('/:id/toggle-status', authenticateToken, authorizePermission('zonas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -348,7 +310,7 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
 });
 
 // Eliminar zona
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('zonas.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -399,7 +361,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Obtener familias de una zona
-router.get('/:id/familias', authenticateToken, async (req, res) => {
+router.get('/:id/familias', authenticateToken, authorizePermission('zonas'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -436,4 +398,3 @@ router.get('/:id/familias', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
-

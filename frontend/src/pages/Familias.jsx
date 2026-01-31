@@ -9,6 +9,23 @@ import BarcodeDataUrl from "../components/labels/BarcodeDataUrl.jsx";
 import JsBarcode from "jsbarcode";
 import ExcelJS from "exceljs";
 
+// Función helper para mostrar edad
+const mostrarEdad = (integrante) => {
+  // Priorizar edad_texto si existe
+  if (integrante.edad_texto) {
+    return integrante.edad_texto;
+  }
+  
+  // Si no, calcular desde fecha_nacimiento
+  if (integrante.fecha_nacimiento) {
+    const anioNac = new Date(integrante.fecha_nacimiento).getFullYear();
+    const edad = new Date().getFullYear() - anioNac;
+    return `${edad}`;
+  }
+  
+  return '';
+};
+
 // === Helpers de Familias (export + titular) ===
 function pickTitular(f) {
   const p = (f?.nombre_padre || '').trim();
@@ -173,14 +190,22 @@ const _yearsFromDate = (fecha) => {
  * - "Y" (años) si hay fecha
  * - "" en cualquier otro caso
  */
-const getEdadParaEtiqueta = (fecha_nacimiento, observaciones) => {
+const getEdadParaEtiqueta = (fecha_nacimiento, edad_texto, observaciones) => {
+  // ✅ PRIORIDAD 1: Si existe edad_texto, usarlo directamente
+  if (edad_texto && String(edad_texto).trim()) {
+    return String(edad_texto).trim();
+  }
+  
+  // PRIORIDAD 2: Calcular desde fecha_nacimiento
   const years = _yearsFromDate(fecha_nacimiento);
-  if (years !== null) return String(years);           // usar AÑOS si hay fecha
+  if (years !== null) return String(years);
 
+  // PRIORIDAD 3: Extraer de observaciones si es formato meses/RN
   if (_isMesesOrRN(observaciones)) {
     const mm = _monthsFromText(observaciones);
-    if (mm !== null) return `${mm} m`;                // MESES solo si no hay fecha
+    if (mm !== null) return `${mm} m`;
   }
+  
   return "";
 };
 
@@ -300,7 +325,7 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
   const filas = (integrantes || []).map((i) => {
     const baseRel = (i.relacion || "").toUpperCase();
     const mark = i.__obsMark ? i.__obsMark : "";
-    const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.observaciones);
+    const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.edad_texto, i.observaciones);
     return {
       relacion: mark ? `${baseRel}${mark}` : baseRel,
       sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
@@ -458,6 +483,72 @@ const Familias = () => {
 
   const [isPrinting, setIsPrinting] = useState(false);
 
+  const [rangoDesde, setRangoDesde] = useState('');
+  const [rangoHasta, setRangoHasta] = useState('');
+
+  const handleImprimirRango = async () => {
+    // Validar que haya zona seleccionada
+    if (!zonaId) {
+      alert('Por favor, seleccione una zona primero');
+      return;
+    }
+    
+    // Validar que se hayan ingresado ambos rangos
+    if (!rangoDesde || !rangoHasta) {
+      alert('Por favor, ingrese el rango completo (desde y hasta)');
+      return;
+    }
+    
+    // Validar formato (opcional, pero recomendado)
+    if (rangoDesde > rangoHasta) {
+      alert('El código inicial debe ser menor o igual al código final');
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Llamar al endpoint de rango
+      const response = await familiasService.getAll({
+        zona_id: zonaId,
+        codigo_desde: rangoDesde,
+        codigo_hasta: rangoHasta,
+        limit: 10000 // Sin paginación para etiquetas
+      });
+      
+      if (response?.success && response.data?.length > 0) {
+        // Preparar datos para impresión usando la estructura existente
+        const familiasParaImprimir = response.data.map(fam => ({
+          familia: {
+            id: fam.id,
+            codigo_unico: fam.codigo_unico,
+            nombre_padre: fam.nombre_padre || '',
+            nombre_madre: fam.nombre_madre || '',
+            direccion: fam.direccion || '',
+            zona_nombre: fam.zona_nombre || '',
+            zona_abreviatura: fam.zona_abreviatura || ''
+          },
+          integrantes: []
+        }));
+        
+        // Usar la función de impresión existente
+        setLabelsData(familiasParaImprimir);
+        setShowEtiquetas(true);
+        setBulkMode(true);
+        
+      } else {
+        alert(`No se encontraron familias en el rango ${rangoDesde} - ${rangoHasta}`);
+      }
+      
+    } catch (error) {
+      console.error('Error al obtener familias por rango:', error);
+      alert('Error al obtener las familias del rango especificado');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
 
   const handlePrint = async () => {
     if (!labelsData?.length) {
@@ -529,6 +620,8 @@ const Familias = () => {
         obsPairs.push({ mark, text: raw });
         i.__obsMark = mark;
       });
+
+      
       
       const obsRender = obsPairs.length
         ? obsPairs.map(o => `${o.mark} ${escapeHtml(o.text)}`).join("; ")
@@ -538,13 +631,16 @@ const Familias = () => {
       const filas = (integrantes || []).map((i) => {
         const baseRel = (i.relacion || "").toUpperCase();
         const mark = i.__obsMark ? i.__obsMark : "";
-        const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.observaciones);
+        const edadStr = getEdadParaEtiqueta(i.fecha_nacimiento, i.edad_texto, i.observaciones);
         return {
           relacion: mark ? `${baseRel}${mark}` : baseRel,
           sexo: (i.sexo || "").toString().trim().toUpperCase().slice(0,1),
           edad: edadStr,
         };
       });
+
+
+      
   
       const totalMiembros = (padreFull ? 1 : 0) + (madreFull ? 1 : 0) + filas.length;
   
@@ -711,6 +807,9 @@ const Familias = () => {
   
     .tabla-placeholder { width: 100%; height: 100%; }
   `;
+
+    
+
   
   
     // === Escribe documento ===
@@ -985,6 +1084,46 @@ const Familias = () => {
             >
               Imprimir etiquetas por zona
             </button>
+
+
+          {/* ✅ AGREGAR ESTA SECCIÓN COMPLETA */}
+          {/* Filtro de Rango para Impresión */}
+          <div className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-300 dark:border-gray-600">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Rango:
+            </label>
+            <input
+              type="text"
+              placeholder="Desde: CTE014"
+              value={rangoDesde}
+              onChange={(e) => setRangoDesde(e.target.value.toUpperCase())}
+              className="w-28 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={!zonaId}
+            />
+            <span className="text-sm text-gray-500">→</span>
+            <input
+              type="text"
+              placeholder="Hasta: CTE035"
+              value={rangoHasta}
+              onChange={(e) => setRangoHasta(e.target.value.toUpperCase())}
+              className="w-28 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={!zonaId}
+            />
+            <button
+              onClick={handleImprimirRango}
+              disabled={!zonaId || !rangoDesde || !rangoHasta || loading}
+              className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-md transition-colors disabled:cursor-not-allowed flex items-center gap-1"
+              title="Imprimir etiquetas del rango especificado"
+            >
+              📄 Rango
+            </button>
+            {!zonaId && (
+              <span className="text-xs text-gray-500 italic">
+                (Seleccione una zona)
+              </span>
+            )}
+          </div>            
+
 
             <button
               className="px-3 py-2 rounded bg-emerald-600 text-white"

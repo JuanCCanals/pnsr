@@ -120,25 +120,6 @@ const Zonas = () => {
     }
   };
 
-  const handleUpdateFamilias = async (zonaId = null) => {
-    try {
-      if (zonaId) {
-        await api.patch(`/zonas/${zonaId}/update-familias`);
-        setSuccess('Número de familias actualizado');
-      } else {
-        await api.patch('/zonas/update-all-familias');
-        setSuccess('Número de familias actualizado para todas las zonas');
-      }
-      fetchZonas();
-      fetchStats();
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Error al actualizar familias';
-      setError(errorMessage);
-      console.error('Error:', err);
-    }
-  };
-
   const handleSearch = async () => {
     if (!searchTerm.trim()) {
       fetchZonas();
@@ -201,12 +182,6 @@ const Zonas = () => {
           </div>
           <div className="flex space-x-3">
             <button
-              onClick={() => handleUpdateFamilias()}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors text-sm"
-            >
-              Actualizar Familias
-            </button>
-            <button
               onClick={openCreateModal}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
             >
@@ -217,22 +192,14 @@ const Zonas = () => {
 
         {/* Estadísticas */}
         {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
               <div className="text-blue-600 dark:text-blue-400 text-sm font-medium">Total Zonas</div>
               <div className="text-2xl font-bold text-blue-800 dark:text-blue-300">{stats.totalZonas}</div>
             </div>
-            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
-              <div className="text-green-600 dark:text-green-400 text-sm font-medium">Zonas Activas</div>
-              <div className="text-2xl font-bold text-green-800 dark:text-green-300">{stats.zonasActivas}</div>
-            </div>
             <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg">
               <div className="text-yellow-600 dark:text-yellow-400 text-sm font-medium">Total Familias</div>
               <div className="text-2xl font-bold text-yellow-800 dark:text-yellow-300">{stats.totalFamiliasRegistradas}</div>
-            </div>
-            <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg">
-              <div className="text-purple-600 dark:text-purple-400 text-sm font-medium">Promedio Familias</div>
-              <div className="text-2xl font-bold text-purple-800 dark:text-purple-300">{stats.promedioFamiliasPorZona}</div>
             </div>
           </div>
         )}
@@ -359,12 +326,7 @@ const Zonas = () => {
                       >
                         {zona.activo ? 'Desactivar' : 'Activar'}
                       </button>
-                      <button
-                        onClick={() => handleUpdateFamilias(zona.id)}
-                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                      >
-                        Actualizar
-                      </button>
+
                       <button
                         onClick={() => handleDelete(zona.id)}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"

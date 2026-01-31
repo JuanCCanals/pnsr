@@ -25,16 +25,19 @@ router.get('/', authenticateToken, async (req, res) => {
         -- Comprobantes de SERVICIOS
         SELECT
           'servicio' AS tipo,
-          c.id       AS comprobante_id,
+          c.id       AS cobro_id,
           c.monto    AS monto,
           c.created_at AS fecha,
           ts.nombre  AS concepto,
-          NULL       AS beneficiario
+          cl.nombre  AS beneficiario,
+          c.numero_comprobante AS numero_comprobante
         FROM cobros c
         JOIN servicios s
           ON c.servicio_id = s.id
         JOIN tipos_servicio ts
           ON s.tipo_servicio_id = ts.id
+        LEFT JOIN clientes cl
+          ON c.cliente_id = cl.id
         WHERE c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
 
         UNION ALL
@@ -42,11 +45,12 @@ router.get('/', authenticateToken, async (req, res) => {
         -- Comprobantes de CAJAS
         SELECT
           'caja'     AS tipo,
-          v.id       AS comprobante_id,
+          v.id       AS cobro_id,
           v.monto    AS monto,
           v.created_at AS fecha,
           'Venta de cajas' AS concepto,
-          b.nombre   AS beneficiario
+          b.nombre   AS beneficiario,
+          NULL       AS numero_comprobante
         FROM ventas v
         JOIN benefactores b
           ON v.benefactor_id = b.id

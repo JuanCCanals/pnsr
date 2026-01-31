@@ -82,11 +82,25 @@ const relNorm = (s) => {
   return 'otro';
 };
 
-const calcularFechaNacimiento = (edad) => {
-  const n = Number(edad);
-  if (!n || n <= 0) return null;
-  const y = new Date().getFullYear() - n;
-  return `${y}-01-01`;
+// Procesa edad: devuelve { fecha_nacimiento, edad_texto }
+const procesarEdad = (edadRaw) => {
+  if (!edadRaw) return { fecha_nacimiento: null, edad_texto: null };
+  
+  // Guardar edad como texto (tal cual viene)
+  const edad_texto = String(edadRaw).trim();
+  
+  // Intentar calcular fecha solo si es número entero
+  const edadNum = Number(edadRaw);
+  if (Number.isInteger(edadNum) && edadNum > 0) {
+    const anioNac = new Date().getFullYear() - edadNum;
+    return { 
+      fecha_nacimiento: `${anioNac}-01-01`, 
+      edad_texto 
+    };
+  }
+  
+  // Si no es número válido (ej: "6 meses"), solo guardamos texto
+  return { fecha_nacimiento: null, edad_texto };
 };
 
 // Mapeo tolerante de encabezados → claves internas
@@ -239,7 +253,8 @@ async function parseWorkbook(buffer) {
     // Integrante
     const rel = relNorm(get('RELACION'));
     const nombreInt = get('INTEG_NOMBRES');
-    const edad = Number(get('EDAD')) || null;
+    const edadRaw = get('EDAD') || null;
+    const edadProcesada = procesarEdad(edadRaw);
     const cond = get('CONDICION') || null;
     const sexoRaw = (get('SEXO') || '').toUpperCase();
     const sexo = sexoRaw.startsWith('M') ? 'M' : sexoRaw.startsWith('F') ? 'F' : null;
@@ -267,12 +282,12 @@ async function parseWorkbook(buffer) {
     if (!g.familia.madre && madre) g.familia.madre = madre;
     if (!g.familia.total && total != null) g.familia.total = total;
 
-    // Todo lo que NO sea padre/madre entra como integrante
     if (nombreInt && !(rel === 'padre' || rel === 'madre')) {
       g.integrantes.push({
         nombre: nombreInt,
         relacion: rel,
-        fecha_nacimiento: calcularFechaNacimiento(edad),
+        fecha_nacimiento: edadProcesada.fecha_nacimiento,
+        edad_texto: edadProcesada.edad_texto,  // ✅ NUEVO CAMPO
         sexo,
         observaciones: cond || null,
       });
@@ -393,6 +408,21 @@ router.post('/', auth, uploadExcelGate, async (req, res) => {
     let integrantesInsertados = 0;
 
     try {
+
+      // ✅ OBTENER MÁXIMO CORRELATIVO DE LA ZONA
+      const [maxRows] = await conn.query(`
+        SELECT MAX(CAST(SUBSTRING(codigo_unico, LENGTH(?) + 1) AS UNSIGNED)) as max_num
+        FROM familias
+        WHERE zona_id = ? AND codigo_unico LIKE CONCAT(?, '%')
+      `, [zona.abreviatura, zona_id, zona.abreviatura]);
+
+      let siguienteNumero = 1;
+      if (maxRows[0]?.max_num) {
+        siguienteNumero = maxRows[0].max_num + 1;
+      }
+
+      console.log(`📊 Zona ${zona.nombre} (${zona.abreviatura}): Siguiente número = ${siguienteNumero}`);
+
       for (const [, pack] of grupos) {
         const { familia, integrantes } = pack;
 
@@ -404,9 +434,15 @@ router.post('/', auth, uploadExcelGate, async (req, res) => {
         }
         const direccion = familia.direccion.trim();
 
-        // código único: <ABREV><NNN>
-        const nroPadded = String(familia.nro || '').padStart(3, '0');
+        // ✅ CÓDIGO ÚNICO AUTO-INCREMENTADO (ignora familia.nro del Excel)
+        const nroPadded = String(siguienteNumero).padStart(3, '0');
         const codigo_unico = `${zona.abreviatura}${nroPadded}`;
+
+        // Log para debug
+        console.log(`  → Familia #${siguienteNumero}: ${codigo_unico}`);
+
+        // Incrementar para la próxima familia
+        siguienteNumero++;
 
         // dependientes = total declarado o cantidad de integrantes detectados
         const totalIntegrantes = familia.total || integrantes.length || 0;
@@ -480,12 +516,13 @@ router.post('/', auth, uploadExcelGate, async (req, res) => {
         // Integrantes (hijos/hijas/otros)
         for (const it of integrantes) {
           await conn.query(
-            `INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones)
-              VALUES (?,?,?,?,?,?)`,
+            `INSERT INTO integrantes_familia (familia_id, nombre, fecha_nacimiento, edad_texto, relacion, sexo, observaciones)
+              VALUES (?,?,?,?,?,?,?)`,
             [
               familia_id,
               it.nombre,
               it.fecha_nacimiento,
+              it.edad_texto || null,  // ✅ NUEVO CAMPO
               it.relacion,
               it.sexo,
               it.observaciones,

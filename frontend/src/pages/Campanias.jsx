@@ -99,7 +99,7 @@ const Campanias = () => {
     setLoading(true);
     try {
       const nuevoEstado = camp.estado === 'ACTIVA' ? 'INACTIVA' : 'ACTIVA';
-      await api.put(`/campanias/${camp.id}`, { estado: nuevoEstado });
+      await api.patch(`/campanias/${camp.id}/toggle`);
       fetchCampanias();
     } catch (err) {
       console.error(err);

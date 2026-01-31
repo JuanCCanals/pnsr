@@ -10,52 +10,41 @@ import Calendar from './assets/Calendar.png';
 import Setting from './assets/Setting.png';
 import Control from './assets/control.png';
 
-// Etiquetas de roles para mostrar al usuario
+// ✅ ACTUALIZADO: Mapea por slug del rol
 const ROLE_LABELS = {
   admin: 'Administrador',
   supervisor: 'Supervisor',
-  operador: 'Operador campañas (Cajas)',
-  consulta: 'Operador servicios (Sacramentos)',
+  operador_cajas: 'Operador Campañas (Cajas)',
+  operador_servicios: 'Operador Servicios (Sacramentos)',
+  consulta: 'Consulta/Reportes',
+  // Compatibilidad con roles antiguos
+  operador: 'Operador Campañas (Cajas)',
 };
 
-// Permisos por rol (a nivel de frontend / menú)
-const ROLE_PERMISSIONS = {
-  admin: ['*'],
-  supervisor: ['zonas', 'familias', 'venta_cajas', 'servicios', 'ingresos', 'reportes', 'usuarios', 'configuracion'],
-  operador: ['zonas', 'familias', 'venta_cajas', 'ingresos', 'reportes'],
-  consulta: ['servicios', 'ingresos', 'reportes'],
-};
-
-// Menú items con roles y permisos asociados
+// Menú items con permisos asociados
 const Menus = [
-  { title: 'Dashboard', src: Chart, path: '/dashboard', roles: ['admin', 'supervisor', 'operador', 'consulta'] },
+  { title: 'Dashboard', src: Chart, path: '/dashboard' },
 
-  // Cajas del Amor (operador campañas)
-  { title: 'Zonas', src: Folder, path: '/zonas', roles: ['admin', 'supervisor', 'operador'], perm: 'zonas' },
-  { title: 'Familias', src: Folder, path: '/familias', roles: ['admin', 'supervisor', 'operador'], perm: 'familias' },
-  { title: 'Campañas', src: Folder, path: '/campanias', roles: ['admin', 'supervisor', 'operador'] },
-  { title: 'Modalidades', src: Folder, path: '/modalidades', roles: ['admin', 'supervisor', 'operador'] },
-  { title: 'PuntosVenta', src: Folder, path: '/puntosventa', roles: ['admin', 'supervisor', 'operador'] },
-  { title: 'Gestión', src: Folder, path: '/gestion', roles: ['admin', 'supervisor', 'operador'], perm: 'venta_cajas' },
-  { title: 'Donaciones', src: Folder, path: '/donaciones', roles: ['admin', 'supervisor', 'operador'], perm: 'ingresos' },
+  // Cajas del Amor
+  { title: 'Zonas', src: Folder, path: '/zonas', permSlug: 'zonas' },
+  { title: 'Familias', src: Folder, path: '/familias', permSlug: 'familias' },
+  { title: 'Campañas', src: Folder, path: '/campanias', permSlug: 'campanias' },
+  { title: 'Modalidades', src: Folder, path: '/modalidades', permSlug: 'modalidades' },
+  { title: 'Puntos Venta', src: Folder, path: '/puntosventa', permSlug: 'puntos_venta' },
+  { title: 'Gestión', src: Folder, path: '/gestion', permSlug: 'gestion_ventas' },
+  { title: 'Donaciones', src: Folder, path: '/donaciones', permSlug: 'donaciones' },
 
-  // Servicios parroquiales (operador servicios)
-  { title: 'Servicios', src: Folder, path: '/servicios', roles: ['admin', 'consulta'], perm: 'servicios' },
-  {
-    title: 'Registrar Servicios',
-    src: Calendar,
-    path: '/registrar-servicios',
-    roles: ['admin', 'consulta'],
-    perm: 'ingresos',
-  },
+  // Servicios parroquiales
+  { title: 'Servicios', src: Folder, path: '/servicios', permSlug: 'servicios' },
+  { title: 'Registrar Servicios', src: Calendar, path: '/registrar-servicios', permSlug: 'registrar_servicios' },
 
-  // Otros
-  { title: 'Comprobantes', src: Folder, path: '/comprobantes', roles: ['admin'] },
-  { title: 'Reportes', src: Chart, path: '/reportes', roles: ['admin', 'supervisor'], perm: 'reportes' },
+  // Reportes
+  { title: 'Comprobantes', src: Folder, path: '/comprobantes', permSlug: 'comprobantes' },
+  { title: 'Reportes', src: Chart, path: '/reportes', permSlug: 'reportes' },
 
-  // Solo administración
-  { title: 'Usuarios', src: User, path: '/usuarios', roles: ['admin'], perm: 'usuarios' },
-  { title: 'Configuración', src: Setting, path: '/configuracion', roles: ['admin'], perm: 'configuracion' },
+  // Administración
+  { title: 'Usuarios', src: User, path: '/usuarios', permSlug: 'usuarios' },
+  { title: 'Configuración', src: Setting, path: '/configuracion', permSlug: 'configuracion' },
 ];
 
 export default function Sidebar() {
@@ -69,7 +58,7 @@ export default function Sidebar() {
 
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout, hasRole } = useAuth();
+  const { user, logout } = useAuth();
 
   useEffect(() => {
     const handleResize = () => {
@@ -92,19 +81,50 @@ export default function Sidebar() {
     localStorage.setItem('theme', next ? 'dark' : 'light');
   };
 
-  // Chequeo de permisos por rol (NO usamos user.permisos aquí)
-  const can = (slug) => {
-    if (!slug) return true;
+  // ✅ NUEVO: Obtener rol slug correctamente (maneja objeto y string)
+  const getRolSlug = () => {
+    if (!user) return '';
+    // Si user.rol es un objeto (nuevo sistema)
+    if (typeof user.rol === 'object' && user.rol !== null) {
+      return user.rol.slug || '';
+    }
+    // Si user.rol es un string (sistema antiguo o compatibilidad)
+    return user.rol || '';
+  };
+
+  // ✅ NUEVO: Obtener nombre del rol para mostrar
+  const getRolNombre = () => {
+    if (!user) return '';
+    // Si user.rol es un objeto (nuevo sistema)
+    if (typeof user.rol === 'object' && user.rol !== null) {
+      return user.rol.nombre || ROLE_LABELS[user.rol.slug] || user.rol.slug;
+    }
+    // Si user.rol es un string (sistema antiguo)
+    return ROLE_LABELS[user.rol] || user.rol;
+  };
+
+  // ✅ NUEVO: Verificar si el usuario tiene permiso para un módulo
+  const hasPermission = (permSlug) => {
+    if (!permSlug) return true; // Si no requiere permiso específico, permitir
     if (!user) return false;
 
-    const role = user.rol;
-    const perms = ROLE_PERMISSIONS[role] || [];
-    if (perms.includes('*')) return true;
-    return perms.includes(slug);
+    // Si es admin, tiene acceso a todo
+    if (user.rol?.es_admin || (typeof user.rol === 'object' && user.rol?.es_admin)) {
+      return true;
+    }
+
+    // Si tiene permisos de todo (wildcard)
+    if (user.permisos?.includes('*')) {
+      return true;
+    }
+
+    // Verificar si tiene algún permiso que empiece con el slug del módulo
+    // Por ejemplo: si permSlug es 'zonas', busca 'zonas.crear', 'zonas.leer', etc.
+    return user.permisos?.some(p => p.startsWith(`${permSlug}.`)) || false;
   };
 
   const handleMenuClick = (menu) => {
-    if (hasRole(menu.roles) && can(menu.perm)) {
+    if (hasPermission(menu.permSlug)) {
       navigate(menu.path);
       if (isMobile) {
         setMobileMenuOpen(false);
@@ -117,7 +137,8 @@ export default function Sidebar() {
     navigate('/login');
   };
 
-  const filteredMenus = Menus.filter((menu) => hasRole(menu.roles) && can(menu.perm));
+  // Filtrar menús según permisos
+  const filteredMenus = Menus.filter((menu) => hasPermission(menu.permSlug));
 
   // ===== Vista móvil =====
   if (isMobile) {
@@ -156,8 +177,8 @@ export default function Sidebar() {
                 <img src={User} className="w-8 h-8" alt="Usuario" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-white truncate">{user.nombre}</p>
-                  <p className="text-xs text-gray-300 capitalize">
-                    {ROLE_LABELS[user.rol] || user.rol}
+                  <p className="text-xs text-gray-300">
+                    {getRolNombre()}
                   </p>
                 </div>
               </div>
@@ -251,8 +272,8 @@ export default function Sidebar() {
             <img src={User} className="w-8 h-8 flex-shrink-0" alt="Usuario" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-white truncate">{user.nombre}</p>
-              <p className="text-xs text-gray-300 capitalize">
-                {ROLE_LABELS[user.rol] || user.rol}
+              <p className="text-xs text-gray-300">
+                {getRolNombre()}
               </p>
             </div>
           </div>

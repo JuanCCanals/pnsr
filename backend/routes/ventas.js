@@ -4,6 +4,13 @@ const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 
+// Validar suma de pagos
+function validarSumaPagos(pagos, montoTotal) {
+  const sumaPagos = pagos.reduce((sum, p) => sum + parseFloat(p.monto || 0), 0);
+  const diferencia = Math.abs(sumaPagos - parseFloat(montoTotal));
+  return diferencia <= 0.01; // Tolerancia de 1 centavo
+}
+
 // Utilidad: obtener caja por c.codigo o por f.codigo_unico
 async function getCajaByCodigo(connOrCodigo, maybeCodigo) {
   let conn = pool;

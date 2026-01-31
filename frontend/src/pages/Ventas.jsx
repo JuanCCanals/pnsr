@@ -68,7 +68,7 @@ export default function Ventas() {
 
   // pagos múltiples por gestión (solo en create se editan)
   const [pagos, setPagos] = useState([
-    { monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }
+    { forma_pago: "Efectivo", monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }
   ]);
 
   // benefactor (solo S/40 al crear)
@@ -331,7 +331,14 @@ export default function Ventas() {
   const totalPagos = pagos.reduce((sum, p) => sum + (Number(p.monto) || 0), 0);
 
   const addPagoRow = () => {
-    setPagos(prev => [...prev, { monto: "", opFecha: "", opHora: "", opNumero: "", opObs: "" }]);
+    setPagos([...pagos, { 
+      forma_pago: "Efectivo",  // ✅ Agregar forma_pago
+      monto: "", 
+      opFecha: "", 
+      opHora: "", 
+      opNumero: "", 
+      opObs: "" 
+    }]);
   };
 
   const removePagoRow = (idx) => {
@@ -427,17 +434,13 @@ export default function Ventas() {
       }
 
       const pagosPayload = pagosLimpios.map(p => ({
-        forma_pago: formaPago,
-        monto: p.monto,
-        fecha, // usamos la fecha de la venta como fecha del pago
-        fecha_operacion: formaPago !== "Efectivo" ? p.opFecha || null : null,
-        hora_operacion:  formaPago !== "Efectivo" ? p.opHora || null : null,
-        nro_operacion:   formaPago !== "Efectivo"
-          ? (p.opNumero || "").slice(0, 32) || null
-          : null,
-        obs_operacion:   formaPago !== "Efectivo"
-          ? (p.opObs || "").slice(0, 100) || null
-          : null,
+        forma_pago: p.forma_pago || "Efectivo", // ✅ USAR la forma de pago del pago individual
+        monto: Number(p.monto || 0),
+        fecha: fecha,
+        fecha_operacion: p.forma_pago !== "Efectivo" ? p.opFecha || null : null,
+        hora_operacion:  p.forma_pago !== "Efectivo" ? p.opHora || null : null,
+        nro_operacion:   p.forma_pago !== "Efectivo" ? (p.opNumero?.trim() || null) : null,
+        obs_operacion:   p.forma_pago !== "Efectivo" ? (p.opObs?.trim() || null) : null,
       }));
       ///////////
 
@@ -894,83 +897,103 @@ export default function Ventas() {
                   </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-xs">
+
                       <thead className="bg-gray-50">
                         <tr>
+                          {/* ✅ NUEVA COLUMNA */}
+                          <th className="px-2 py-1 text-left">Forma Pago</th>
                           <th className="px-2 py-1 text-left">Monto</th>
-                          {formaPago !== "Efectivo" && formaPago !== "Con excedente" && (
-                            <>
-                              <th className="px-2 py-1 text-left">Fec. operación</th>
-                              <th className="px-2 py-1 text-left">Hora</th>
-                              <th className="px-2 py-1 text-left">Nº operación</th>
-                              <th className="px-2 py-1 text-left">Obs.</th>
-                            </>
-                          )}
+                          <th className="px-2 py-1 text-left">Fec. operación</th>
+                          <th className="px-2 py-1 text-left">Hora</th>
+                          <th className="px-2 py-1 text-left">Nº operación</th>
+                          <th className="px-2 py-1 text-left">Obs.</th>
                           <th className="px-2 py-1 text-right">Acciones</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y">
-                        {pagos.map((p, idx) => (
-                          <tr key={idx}>
-                            <td className="px-2 py-1">
-                              <input
-                                type="number"
-                                step="0.01"
-                                className="w-full border rounded px-1 py-0.5"
-                                value={p.monto}
-                                onChange={(e) => updatePago(idx, "monto", e.target.value)}
-                              />
-                            </td>
-                            
-                            {formaPago !== "Efectivo" && formaPago !== "Con excedente" &&(
-                              <>
-                                <td className="px-2 py-1">
-                                  <input
-                                    type="date"
-                                    className="w-full border rounded px-1 py-0.5"
-                                    value={p.opFecha}
-                                    onChange={(e) => updatePago(idx, "opFecha", e.target.value)}
-                                  />
-                                </td>
-                                <td className="px-2 py-1">
-                                  <input
-                                    type="time"
-                                    className="w-full border rounded px-1 py-0.5"
-                                    value={p.opHora}
-                                    onChange={(e) => updatePago(idx, "opHora", e.target.value)}
-                                  />
-                                </td>
-                                <td className="px-2 py-1">
-                                  <input
-                                    maxLength={32}
-                                    className="w-full border rounded px-1 py-0.5"
-                                    value={p.opNumero}
-                                    onChange={(e) => updatePago(idx, "opNumero", e.target.value)}
-                                  />
-                                </td>
-                                <td className="px-2 py-1">
-                                  <input
-                                    maxLength={100}
-                                    className="w-full border rounded px-1 py-0.5"
-                                    value={p.opObs}
-                                    onChange={(e) => updatePago(idx, "opObs", e.target.value)}
-                                  />
-                                </td>
-                              </>
-                            )}
-                            
-                            <td className="px-2 py-1 text-right">
-                              <button
-                                type="button"
-                                className="text-xs text-red-600 hover:underline"
-                                onClick={() => removePagoRow(idx)}
-                                disabled={pagos.length === 1}
-                              >
-                                Quitar
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
+
+                        <tbody className="divide-y">
+                          {pagos.map((p, idx) => (
+                            <tr key={idx}>
+                              {/* ✅ NUEVA COLUMNA: Select de forma de pago */}
+                              <td className="px-2 py-1">
+                                <select
+                                  className="w-full border rounded px-1 py-0.5 text-xs"
+                                  value={p.forma_pago || "Efectivo"}
+                                  onChange={(e) => updatePago(idx, "forma_pago", e.target.value)}
+                                >
+                                  <option>Efectivo</option>
+                                  <option>Yape</option>
+                                  <option>Plin</option>
+                                  <option>Transferencia</option>
+                                  <option>Interbancario</option>
+                                  <option>Tarjeta</option>
+                                  <option>Depósito</option>
+                                </select>
+                              </td>
+                              
+                              {/* Columna Monto (ya existe) */}
+                              <td className="px-2 py-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  className="w-full border rounded px-1 py-0.5"
+                                  value={p.monto}
+                                  onChange={(e) => updatePago(idx, "monto", e.target.value)}
+                                />
+                              </td>
+                              
+                              {/* Columnas de operación (YA EXISTEN, solo quitar el condicional) */}
+                              <td className="px-2 py-1">
+                                <input
+                                  type="date"
+                                  className="w-full border rounded px-1 py-0.5"
+                                  value={p.opFecha}
+                                  onChange={(e) => updatePago(idx, "opFecha", e.target.value)}
+                                  disabled={p.forma_pago === "Efectivo"}
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input
+                                  type="time"
+                                  className="w-full border rounded px-1 py-0.5"
+                                  value={p.opHora}
+                                  onChange={(e) => updatePago(idx, "opHora", e.target.value)}
+                                  disabled={p.forma_pago === "Efectivo"}
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input
+                                  maxLength={32}
+                                  className="w-full border rounded px-1 py-0.5"
+                                  value={p.opNumero}
+                                  onChange={(e) => updatePago(idx, "opNumero", e.target.value)}
+                                  disabled={p.forma_pago === "Efectivo"}
+                                />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input
+                                  maxLength={100}
+                                  className="w-full border rounded px-1 py-0.5"
+                                  value={p.opObs}
+                                  onChange={(e) => updatePago(idx, "opObs", e.target.value)}
+                                />
+                              </td>
+                              
+                              {/* Botones de acción (ya existen) */}
+                              <td className="px-2 py-1 text-right space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => removePago(idx)}
+                                  className="text-red-600 hover:underline text-xs"
+                                  disabled={pagos.length === 1}
+                                >
+                                  Eliminar
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+
                     </table>
                   </div>
                   <div className="mt-2">

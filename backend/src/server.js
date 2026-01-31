@@ -19,6 +19,8 @@ const reportesRoutes = require("../routes/reportes");
 const integracionRoutes = require("../routes/integracion");
 const excedentesRoute   = require('../routes/excedentes'); // NUEVO
 const comprobantesRoute = require("../routes/comprobantes"); // 👈 NUEVO
+const rolesRoutes = require('../routes/roles');
+const modulosRoutes = require('../routes/modulos');
 
 const DEMO = process.env.DEMO_MODE === 'true';
 if (DEMO) console.warn('⚠️ DEMO_MODE ENABLED: auth bypassed for demo purposes');
@@ -48,41 +50,113 @@ app.get('/api/ping', (_req, res) => {
 });
 
 
-// === Configuración de ROLES y sus módulos permitidos ===
-// IMPORTANTE: asegúrate que estos nombres coincidan con el campo `modulo` de tu tabla `permisos`
-// y con los módulos del Sidebar.
-const ROLE_MODULES = {
-  admin: [
-    '*', // admin ve todo
-  ],
-  supervisor: [
-    'dashboard',
-    'familias',
-    'cajas',
-    'ventas',
-    'reportes',
-    'servicios',
-  ],
-  operador_campanias: [
-    'dashboard',
-    'zonas',
-    'familias',
-    'cajas',
-    'ventas',
-    'reportes',
-  ],
-  operador_servicios: [
-    'dashboard',
-    'servicios',
-    'reportes',
-  ],
-};
+// ==========================================
+// ✅ NUEVA FUNCIÓN: Obtener usuario con permisos del sistema RBAC
+// ==========================================
 
 /**
- * Asigna permisos a un usuario según su rol.
- * Si el rol es 'admin' → se le asignan TODOS los permisos activos.
- * Si el rol es otro → se le asignan solo los permisos cuyo `modulo` está en ROLE_MODULES[rol].
+ * Obtener información completa del usuario incluyendo rol y permisos
+ * @param {number} userId 
+ * @returns {Promise<object>} Información del usuario con permisos
  */
+async function getUserWithPermissions(userId) {
+  try {
+    // Obtener datos básicos del usuario y su rol
+    const [usuarios] = await pool.execute(`
+      SELECT 
+        u.id,
+        u.nombre,
+        u.email,
+        u.activo,
+        r.id as rol_id,
+        r.nombre as rol_nombre,
+        r.slug as rol_slug,
+        r.es_admin
+      FROM usuarios u
+      JOIN roles r ON u.rol_id = r.id
+      WHERE u.id = ? AND u.activo = TRUE AND r.activo = TRUE
+    `, [userId]);
+
+    if (usuarios.length === 0) {
+      return null;
+    }
+
+    const usuario = usuarios[0];
+
+    // Si es admin, no necesita permisos individuales
+    if (usuario.es_admin) {
+      return {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        rol: {
+          id: usuario.rol_id,
+          nombre: usuario.rol_nombre,
+          slug: usuario.rol_slug,
+          es_admin: true
+        },
+        permisos: ['*'], // Acceso total
+        modulos: [] // Admin tiene acceso a todos
+      };
+    }
+
+    // Obtener permisos del usuario
+    const [permisos] = await pool.execute(`
+      SELECT DISTINCT
+        p.slug,
+        p.accion,
+        m.slug as modulo_slug,
+        m.nombre as modulo_nombre,
+        m.ruta as modulo_ruta
+      FROM rol_permisos rp
+      JOIN permisos p ON rp.permiso_id = p.id
+      JOIN modulos m ON p.modulo_id = m.id
+      WHERE rp.rol_id = ? AND p.activo = TRUE AND m.activo = TRUE
+      ORDER BY m.orden, p.accion
+    `, [usuario.rol_id]);
+
+    // Crear array de slugs de permisos
+    const permisosArray = permisos.map(p => p.slug);
+
+    // Crear array de módulos únicos con sus permisos
+    const modulosMap = {};
+    permisos.forEach(p => {
+      if (!modulosMap[p.modulo_slug]) {
+        modulosMap[p.modulo_slug] = {
+          slug: p.modulo_slug,
+          nombre: p.modulo_nombre,
+          ruta: p.modulo_ruta,
+          permisos: []
+        };
+      }
+      modulosMap[p.modulo_slug].permisos.push(p.accion);
+    });
+
+    return {
+      id: usuario.id,
+      nombre: usuario.nombre,
+      email: usuario.email,
+      rol: {
+        id: usuario.rol_id,
+        nombre: usuario.rol_nombre,
+        slug: usuario.rol_slug,
+        es_admin: false
+      },
+      permisos: permisosArray,
+      modulos: Object.values(modulosMap)
+    };
+  } catch (error) {
+    console.error('Error obteniendo usuario con permisos:', error);
+    return null;
+  }
+}
+
+// ==========================================
+// NOTA: Esta función assignPermissionsByRole ya no se usa con el nuevo sistema
+// pero la dejamos comentada por si necesitas migrar usuarios antiguos
+// ==========================================
+
+/*
 async function assignPermissionsByRole(usuarioId, rol) {
   if (!usuarioId || !rol) return;
 
@@ -125,6 +199,7 @@ async function assignPermissionsByRole(usuarioId, rol) {
     [values]
   );
 }
+*/
 
 
 app.use((req, res, next) => {
@@ -135,7 +210,7 @@ app.use((req, res, next) => {
   return authenticateToken(req, res, next); // Aplicar en el resto
 });
 
-app.use('/api/benefactores', ventasRoutes); // alias “amistoso” para el cliente
+app.use('/api/benefactores', ventasRoutes); // alias "amistoso" para el cliente
 app.use('/api/ventas', ventasRoutes);       // alias técnico (opcional, útil si ya lo usabas)
 app.use("/api/catalogos", catalogosRoutes);
 app.use("/api/permisos", permisosRoutes);
@@ -150,6 +225,9 @@ app.use('/api/reportes', reportesRoutes);
 app.use('/api/excedentes', excedentesRoute);
 
 app.use("/api/comprobantes", comprobantesRoute); // 👈 NUEVO
+
+app.use('/api/roles', rolesRoutes);
+app.use('/api/modulos', modulosRoutes);
 // ==========================================
 
 
@@ -159,28 +237,10 @@ app.use("/api/comprobantes", comprobantesRoute); // 👈 NUEVO
 
 
 // ==================== RUTAS DE AUTENTICACIÓN ====================
-
-// Login
+// ✅ Login ACTUALIZADO - Ahora usa getUserWithPermissions
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (DEMO) {
-      const user = {
-        id: 1,
-        nombre: 'Demo User',
-        email,                // el que ponga tu clienta
-        rol: 'admin',
-        permisos: []          // o pon los que quieras mostrar
-      };
-      const token = jwt.sign(
-        { id: user.id, email: user.email, rol: user.rol },
-        process.env.JWT_SECRET || 'demo-secret',
-        { expiresIn: '24h' }
-      );
-      return res.json({ success: true, token, user });
-    }
-    
 
     if (!email || !password) {
       return res.status(400).json({
@@ -191,7 +251,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Buscar usuario
     const [rows] = await pool.execute(
-      'SELECT id, nombre, email, password_hash AS password, rol, activo FROM usuarios WHERE email = ? LIMIT 1',
+      'SELECT id, nombre, email, password_hash AS password, rol, activo, rol_id FROM usuarios WHERE email = ? LIMIT 1',
       [email]
     );
 
@@ -220,34 +280,33 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-  // Obtener permisos del usuario (activos)
-  const [permisosRows] = await pool.execute(
-    `SELECT p.modulo, p.nombre
-      FROM usuario_permisos up 
-      JOIN permisos p ON up.permiso_id = p.id
-      WHERE up.usuario_id = ? AND (up.activo IS NULL OR up.activo = 1) AND (p.activo IS NULL OR p.activo = 1)
-      ORDER BY p.modulo`,
-    [usuario.id]
-  );
-  const permisos = permisosRows.map(r => ({ modulo: r.modulo, nombre: r.nombre }));
+    // ✅ NUEVO: Obtener datos completos con permisos del sistema RBAC
+    const usuarioCompleto = await getUserWithPermissions(usuario.id);
 
-    // Generar token (consistente con req.user.id)
+    if (!usuarioCompleto) {
+      return res.status(401).json({
+        success: false,
+        error: 'Error al cargar permisos del usuario'
+      });
+    }
+
+    // ✅ NUEVO: Token incluye información del rol
     const token = jwt.sign(
-      { id: usuario.id, email: usuario.email, rol: usuario.rol },
+      { 
+        id: usuarioCompleto.id, 
+        email: usuarioCompleto.email,
+        rol_slug: usuarioCompleto.rol.slug,
+        es_admin: usuarioCompleto.rol.es_admin
+      },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
 
+    // ✅ NUEVO: Respuesta incluye estructura completa de permisos
     res.json({
       success: true,
       token,
-      user: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        email: usuario.email,
-        rol: usuario.rol,
-        permisos
-      }
+      user: usuarioCompleto
     });
 
   } catch (error) {
@@ -259,33 +318,130 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Verificar token
+
+// ✅ Verificar token ACTUALIZADO - Ahora usa getUserWithPermissions
 app.get('/api/auth/verify', async (req, res) => {
   try {
-    // Obtener permisos del usuario
-    const [permisosRows] = await pool.execute(
-      `SELECT p.modulo, p.nombre
-          FROM usuario_permisos up 
-          JOIN permisos p ON up.permiso_id = p.id 
-        WHERE up.usuario_id = ? AND (up.activo IS NULL OR up.activo = 1) AND (p.activo IS NULL OR p.activo = 1)
-        ORDER BY p.modulo`,
-      [req.user.id]
-    );
-    const permisos = permisosRows.map(r => ({ modulo: r.modulo, nombre: r.nombre }));
-    
+    // En este punto, authenticateToken ya se ejecutó y puso req.user
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        error: 'Token inválido'
+      });
+    }
 
+    // ✅ NUEVO: Obtener datos completos con permisos del sistema RBAC
+    const usuarioCompleto = await getUserWithPermissions(req.user.id);
+
+    if (!usuarioCompleto) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado'
+      });
+    }
+
+    // ✅ NUEVO: Respuesta incluye estructura completa de permisos
     res.json({
       success: true,
-      user: {
-        id: req.user.id,
-        nombre: req.user.nombre,
-        email: req.user.email,
-        rol: req.user.rol,
-        permisos
+      user: usuarioCompleto
+    });
+
+  } catch (error) {
+    console.error('Error verificando token:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor'
+    });
+  }
+});
+
+// Registro de usuario
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { nombre, email, password, rol } = req.body;
+
+    // Validaciones básicas
+    if (!nombre || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nombre, email y contraseña son requeridos'
+      });
+    }
+
+    // Validar formato de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Formato de email inválido'
+      });
+    }
+
+    // Verificar si el email ya existe
+    const [existing] = await pool.execute(
+      'SELECT id FROM usuarios WHERE email = ?',
+      [email]
+    );
+
+    if (existing.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'El email ya está registrado'
+      });
+    }
+
+    // Hash de la contraseña
+    const hashedPassword = await bcryptjs.hash(password, 10);
+
+    // Si no se proporciona rol, asignar 'consulta' por defecto
+    const userRol = rol || 'consulta';
+    
+    // Obtener rol_id del rol proporcionado o por defecto
+    const [rolData] = await pool.execute(
+      'SELECT id FROM roles WHERE slug = ? AND activo = TRUE LIMIT 1',
+      [userRol]
+    );
+
+    if (rolData.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Rol no válido'
+      });
+    }
+
+    const rol_id = rolData[0].id;
+
+    // Crear usuario
+    const [result] = await pool.execute(
+      'INSERT INTO usuarios (nombre, email, password_hash, rol, rol_id, activo) VALUES (?, ?, ?, ?, ?, TRUE)',
+      [nombre, email, hashedPassword, userRol, rol_id]
+    );
+
+    const userId = result.insertId;
+
+    // Generar token
+    const token = jwt.sign(
+      { id: userId, email, rol: userRol },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    // Obtener datos completos con permisos
+    const usuarioCompleto = await getUserWithPermissions(userId);
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: usuarioCompleto || {
+        id: userId,
+        nombre,
+        email,
+        rol: { slug: userRol }
       }
     });
+
   } catch (error) {
-    console.error('Error en verify:', error);
+    console.error('Error en registro:', error);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor'
@@ -304,14 +460,15 @@ app.get('/api/usuarios', authenticateToken, async (req, res) => {
         u.nombre, 
         u.email, 
         u.rol, 
-        u.activo, 
+        u.rol_id,
+        r.nombre as rol_nombre,
+        r.slug as rol_slug,
+        u.activo,
         u.created_at,
-        u.ultimo_acceso,
-        COUNT(up.permiso_id) as total_permisos
+        u.updated_at
       FROM usuarios u
-      LEFT JOIN usuario_permisos up ON u.id = up.usuario_id
-      GROUP BY u.id, u.nombre, u.email, u.rol, u.activo, u.created_at, u.ultimo_acceso
-      ORDER BY u.nombre
+      LEFT JOIN roles r ON u.rol_id = r.id
+      ORDER BY u.created_at DESC
     `);
 
     res.json({
@@ -327,45 +484,25 @@ app.get('/api/usuarios', authenticateToken, async (req, res) => {
   }
 });
 
-// Obtener estadísticas de usuarios
-app.get('/api/usuarios/stats', authenticateToken, async (req, res) => {
-  try {
-    const [totalRows] = await pool.execute('SELECT COUNT(*) as total FROM usuarios');
-    const [activosRows] = await pool.execute('SELECT COUNT(*) as activos FROM usuarios WHERE activo = 1');
-    const [adminsRows] = await pool.execute('SELECT COUNT(*) as admins FROM usuarios WHERE rol = "admin"');
-    const [activosMesRows] = await pool.execute(`
-      SELECT COUNT(*) as activos_mes 
-      FROM usuarios 
-      WHERE ultimo_acceso >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND activo = 1
-    `);
-
-    res.json({
-      success: true,
-      data: {
-        total: totalRows[0].total,
-        activos: activosRows[0].activos,
-        admins: adminsRows[0].admins,
-        activos_mes: activosMesRows[0].activos_mes
-      }
-    });
-  } catch (error) {
-    console.error('Error al obtener estadísticas:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
 // Obtener un usuario por ID
 app.get('/api/usuarios/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [rows] = await pool.execute(
-      'SELECT id, nombre, email, rol, activo FROM usuarios WHERE id = ?',
-      [id]
-    );
+    const [rows] = await pool.execute(`
+      SELECT 
+        u.id, 
+        u.nombre, 
+        u.email, 
+        u.rol, 
+        u.rol_id,
+        r.nombre as rol_nombre,
+        r.slug as rol_slug,
+        u.activo
+      FROM usuarios u
+      LEFT JOIN roles r ON u.rol_id = r.id
+      WHERE u.id = ?
+    `, [id]);
 
     if (rows.length === 0) {
       return res.status(404).json({
@@ -374,22 +511,9 @@ app.get('/api/usuarios/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    const usuario = rows[0];
-
-    // Obtener permisos del usuario
-    const [permisosRows] = await pool.execute(
-      `SELECT p.id, p.nombre 
-       FROM usuario_permisos up 
-       JOIN permisos p ON up.permiso_id = p.id 
-       WHERE up.usuario_id = ?`,
-      [id]
-    );
-
-    usuario.permisos = permisosRows;
-
     res.json({
       success: true,
-      data: usuario
+      data: rows[0]
     });
   } catch (error) {
     console.error('Error al obtener usuario:', error);
@@ -400,47 +524,12 @@ app.get('/api/usuarios/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Obtener permisos de un usuario específico
-app.get('/api/usuarios/:id/permisos', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Obtener todos los permisos disponibles
-    const [todosPermisos] = await pool.execute('SELECT id, nombre, descripcion FROM permisos ORDER BY nombre');
-    
-    // Obtener permisos asignados al usuario
-    const [permisosAsignados] = await pool.execute(
-      'SELECT permiso_id FROM usuario_permisos WHERE usuario_id = ?',
-      [id]
-    );
-
-    const permisosAsignadosIds = permisosAsignados.map(p => p.permiso_id);
-
-    // Combinar información
-    const permisos = todosPermisos.map(permiso => ({
-      ...permiso,
-      asignado: permisosAsignadosIds.includes(permiso.id)
-    }));
-
-    res.json({
-      success: true,
-      data: permisos
-    });
-  } catch (error) {
-    console.error('Error al obtener permisos del usuario:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error interno del servidor'
-    });
-  }
-});
-
-// Crear nuevo usuario
+// Crear usuario
 app.post('/api/usuarios', authenticateToken, async (req, res) => {
   try {
-    const { nombre, email, password, rol, activo, permisos } = req.body;
+    const { nombre, email, password, rol, rol_id, activo } = req.body;
 
-    // Validaciones básicas
+    // Validaciones
     const errors = [];
     if (!nombre || nombre.trim().length < 2) {
       errors.push({ field: 'nombre', message: 'El nombre debe tener al menos 2 caracteres' });
@@ -450,6 +539,9 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
     }
     if (!password || password.length < 6) {
       errors.push({ field: 'password', message: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+    if (!rol_id) {
+      errors.push({ field: 'rol_id', message: 'Debe seleccionar un rol' });
     }
 
     if (errors.length > 0) {
@@ -461,12 +553,12 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
     }
 
     // Verificar si el email ya existe
-    const [existingUser] = await pool.execute(
+    const [existingEmail] = await pool.execute(
       'SELECT id FROM usuarios WHERE email = ?',
       [email]
     );
 
-    if (existingUser.length > 0) {
+    if (existingEmail.length > 0) {
       return res.status(400).json({
         success: false,
         errors: [{ field: 'email', message: 'El email ya está en uso' }],
@@ -474,32 +566,33 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
       });
     }
 
-    // Encriptar contraseña
+    // Hash de la contraseña
     const hashedPassword = await bcryptjs.hash(password, 10);
+
+    // Obtener slug del rol para campo legacy 'rol'
+    const [rolData] = await pool.execute(
+      'SELECT slug FROM roles WHERE id = ? LIMIT 1',
+      [rol_id]
+    );
+    const rolSlug = rolData.length > 0 ? rolData[0].slug : rol || 'consulta';
 
     // Insertar usuario
     const [result] = await pool.execute(
-      'INSERT INTO usuarios (nombre, email, password_hash, rol, activo) VALUES (?, ?, ?, ?, ?)',
-      [nombre.trim(), email.toLowerCase(), hashedPassword, rol || 'operador', activo !== false]
+      'INSERT INTO usuarios (nombre, email, password_hash, rol, rol_id, activo) VALUES (?, ?, ?, ?, ?, ?)',
+      [nombre.trim(), email.toLowerCase(), hashedPassword, rolSlug, rol_id, activo !== false]
     );
-
-    const usuarioId = result.insertId;
-
-    // Asignar permisos si se proporcionaron
-    // Asignar permisos según rol (ignoramos los permisos manuales aquí)
-    await assignPermissionsByRole(usuarioId, rol || 'operador_campanias');
-
 
     res.status(201).json({
       success: true,
+      message: 'Usuario creado exitosamente',
       data: {
-        id: usuarioId,
+        id: result.insertId,
         nombre: nombre.trim(),
         email: email.toLowerCase(),
-        rol: rol || 'operador_campanias',
+        rol: rolSlug,
+        rol_id,
         activo: activo !== false
-      },
-      message: 'Usuario creado exitosamente'
+      }
     });
 
   } catch (error) {
@@ -515,7 +608,7 @@ app.post('/api/usuarios', authenticateToken, async (req, res) => {
 app.put('/api/usuarios/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, email, password, rol, activo, permisos } = req.body;
+    const { nombre, email, password, rol, rol_id, activo } = req.body;
 
     // Verificar si el usuario existe
     const [existingUser] = await pool.execute(
@@ -583,10 +676,24 @@ app.put('/api/usuarios/:id', authenticateToken, async (req, res) => {
       updateFields.push('password_hash = ?');
       updateValues.push(hashedPassword);
     }
-    if (rol) {
+    
+    // Si se actualiza rol_id, también actualizar el campo legacy 'rol'
+    if (rol_id) {
+      const [rolData] = await pool.execute(
+        'SELECT slug FROM roles WHERE id = ? LIMIT 1',
+        [rol_id]
+      );
+      const rolSlug = rolData.length > 0 ? rolData[0].slug : rol || 'consulta';
+      
+      updateFields.push('rol_id = ?');
+      updateValues.push(rol_id);
+      updateFields.push('rol = ?');
+      updateValues.push(rolSlug);
+    } else if (rol) {
       updateFields.push('rol = ?');
       updateValues.push(rol);
     }
+    
     if (activo !== undefined) {
       updateFields.push('activo = ?');
       updateValues.push(activo);
@@ -599,13 +706,6 @@ app.put('/api/usuarios/:id', authenticateToken, async (req, res) => {
         updateValues
       );
     }
-
-    // Actualizar permisos si se proporcionaron
-    // Si cambiaste de rol, reasigna permisos automáticamente según el nuevo rol
-    if (rol) {
-      await assignPermissionsByRole(id, rol);
-    }
-
 
     res.json({
       success: true,
@@ -679,7 +779,7 @@ app.delete('/api/usuarios/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    // Eliminar permisos del usuario
+    // Eliminar permisos del usuario (si existen en la tabla antigua)
     await pool.execute(
       'DELETE FROM usuario_permisos WHERE usuario_id = ?',
       [id]
@@ -765,6 +865,8 @@ const tiposServicioRoute    = require('../routes/tipos-servicio');
 const serviciosRoute        = require('../routes/servicios'); // <-- usa el archivo en minúsculas que te pasé
 const clientesRoute         = require('../routes/clientes');  // <-- nuevo
 const cobrosRoute           = require('../routes/cobros');    // <-- nuevo
+const configuracionRoute    = require('../routes/configuracion');
+const metodosPagoRoute      = require('../routes/metodos-pago');  // ← NUEVO
 const ventasRoute           = require('../routes/ventas');    // <-- usa el archivo en minúsculas
 
 // Usar rutas (orden recomendado)
@@ -775,22 +877,23 @@ app.use('/api/cajas',              cajasRoutes);
 app.use('/api/campanias',          campaniasRoute);
 app.use('/api/modalidades',        modalidadesRoute);
 app.use('/api/puntos-venta',       puntosVentaRoute);
-app.use('/api/tipos-servicio', tiposServicioRoute);
+app.use('/api/tipos-servicio',     tiposServicioRoute);
 
 // Nuevos/actualizados
 app.use('/api/clientes',           clientesRoute);
 app.use('/api/servicios',          serviciosRoute);
 app.use('/api/cobros',             cobrosRoute);
+app.use('/api/metodos-pago',       metodosPagoRoute);  // ← NUEVO
 app.use('/api/ventas',             ventasRoute);
-
+app.use('/api/configuracion',      configuracionRoute);
 
 
 
 // ==================== SERVIDOR ====================
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`?? Servidor ejecutándose en puerto ${PORT}`);
-  console.log(`?? CORS habilitado para: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+  console.log(`🚀 Servidor ejecutándose en puerto ${PORT}`);
+  console.log(`🔒 CORS habilitado para: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
 });
 
 // Manejo de errores no capturados

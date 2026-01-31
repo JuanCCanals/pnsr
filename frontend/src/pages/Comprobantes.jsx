@@ -85,107 +85,48 @@ const Comprobantes = () => {
     });
   };
 
-  const handlePrint = (ticket) => {
+  const handlePrint = async (ticket) => {
     if (!ticket) return;
     setTicketSeleccionado(ticket);
     setPrinting(true);
 
-    // Abrir nueva ventana con el ticket para imprimir
-    const printWindow = window.open('', '_blank', 'width=600,height=800');
+    try {
+      const token = localStorage.getItem('token');
+      
+      // El cobro_id viene directamente del backend
+      const cobroId = ticket.cobro_id;
+      
+      // Hacer petición al backend para obtener el PDF
+      const response = await fetch(`${API_URL}/cobros/${cobroId}/ticket?hideCliente=1`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-    const fechaStr = formatFecha(ticket.fecha);
-    const montoStr = formatMoneda(ticket.monto);
+      if (!response.ok) {
+        throw new Error('Error al generar el ticket');
+      }
 
-    const html = `
-      <!DOCTYPE html>
-      <html lang="es">
-      <head>
-        <meta charset="UTF-8" />
-        <title>Comprobante #${ticket.comprobante_id}</title>
-        <style>
-          body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            padding: 16px;
-          }
-          .ticket {
-            border: 1px dashed #333;
-            padding: 16px;
-            max-width: 360px;
-            margin: 0 auto;
-          }
-          .titulo {
-            text-align: center;
-            font-weight: bold;
-            margin-bottom: 8px;
-          }
-          .linea {
-            display: flex;
-            justify-content: space-between;
-            font-size: 14px;
-            margin: 4px 0;
-          }
-          .resaltado {
-            font-weight: bold;
-          }
-          .separador {
-            margin: 8px 0;
-            border-top: 1px dashed #aaa;
-          }
-          .pie {
-            text-align: center;
-            margin-top: 12px;
-            font-size: 12px;
-            color: #555;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="ticket">
-          <div class="titulo">PNSR - Comprobante de ${ticket.tipo === 'caja' ? 'Caja del Amor' : 'Servicio'}</div>
-          <div class="linea">
-            <span>ID:</span>
-            <span class="resaltado">#${ticket.comprobante_id}</span>
-          </div>
-          <div class="linea">
-            <span>Fecha:</span>
-            <span>${fechaStr}</span>
-          </div>
-          <div class="linea">
-            <span>Monto:</span>
-            <span class="resaltado">${montoStr}</span>
-          </div>
-          <div class="linea">
-            <span>Concepto:</span>
-            <span>${ticket.concepto || '-'}</span>
-          </div>
-          ${
-            ticket.beneficiario
-              ? `<div class="linea">
-                  <span>Benefactor:</span>
-                  <span>${ticket.beneficiario}</span>
-                </div>`
-              : ''
-          }
-          <div class="separador"></div>
-          <div class="pie">
-            Gracias por su apoyo.<br/>
-            Dios le bendiga abundantemente.
-          </div>
-        </div>
-        <script>
-          window.onload = function() {
-            window.print();
-          };
-        </script>
-      </body>
-      </html>
-    `;
+      // Convertir respuesta a blob
+      const blob = await response.blob();
+      
+      // Crear URL del blob y abrirlo en nueva ventana
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      
+      // Limpiar después de un momento
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 100);
 
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    // No cerramos automáticamente, dejamos que el usuario lo cierre
-    setTimeout(() => setPrinting(false), 500);
+    } catch (error) {
+      console.error('Error al imprimir ticket:', error);
+      alert('Error al generar el ticket. Por favor, intente nuevamente.');
+    } finally {
+      setPrinting(false);
+      setTicketSeleccionado(null);
+    }
   };
 
   const filtrados = filtrarComprobantes();

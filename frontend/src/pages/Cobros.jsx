@@ -1,6 +1,7 @@
 // frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect } from 'react';
 import { cobrosService } from '../services/api'; // arriba con el resto de imports
+import { consultarDNI } from '../services/dniService'; // â† AGREGAR ESTA LÃNEA
 // import { useAuth } from '../contexts/AuthContext'; // Si no lo usas, déjalo comentado
 
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
@@ -226,8 +227,17 @@ const Servicios = () => {
     obs_operacion: '',
     observaciones: ''       // único campo de texto libre (quitamos descripcion)
   });
+
   const [errors, setErrors] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
+
+  // ========== NUEVOS ESTADOS ==========
+const [buscandoDNI, setBuscandoDNI] = useState(false);
+const [metodosPago, setMetodosPago] = useState([]);
+const [pagos, setPagos] = useState([
+  { metodo_pago_id: '', monto: '' }
+]);
+const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
   const estadosServicios = [
     { value: 'programado', label: 'Programado', color: 'bg-yellow-100 text-yellow-800' },
@@ -241,6 +251,7 @@ const Servicios = () => {
     loadTiposServicio();
     loadFormasPago();
     loadStats();
+    loadMetodosPago(); // â† AGREGAR ESTA LÃNEA
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, searchTerm, selectedTipo, selectedEstado, fechaDesde, fechaHasta]);
 
@@ -304,53 +315,232 @@ const Servicios = () => {
     }
   };
 
+  const loadMetodosPago = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/metodos-pago', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setMetodosPago(data.data);
+      }
+    } catch (error) {
+      console.error('Error cargando mÃ©todos de pago:', error);
+    }
+  };
+
+  // ========== BÃšSQUEDA DNI ==========
+  const handleBuscarDNI = async () => {
+    const dni = formData.cliente_dni?.trim();
+    
+    if (!dni || dni.length !== 8) {
+      alert('Ingrese un DNI válido de 8 dígitos');
+      return;
+    }
+
+    setBuscandoDNI(true);
+    try {
+      const resultado = await consultarDNI(dni);
+      setFormData(prev => ({
+        ...prev,
+        cliente_nombre: resultado.nombreCompleto
+      }));
+      alert(`✓ Datos encontrados:\n${resultado.nombreCompleto}`);
+    } catch (error) {
+      console.error('Error buscando DNI:', error);
+      alert(error.message || 'No se pudo consultar el DNI.\nIngrese el nombre manualmente.');
+    } finally {
+      setBuscandoDNI(false);
+    }
+  };
+
+  // ========== GESTIÃ“N PAGOS MÃšLTIPLES ==========
+  const agregarPago = () => {
+    if (pagos.length < 2) {
+      setPagos([...pagos, { metodo_pago_id: '', monto: '' }]);
+    }
+  };
+
+  const eliminarPago = (index) => {
+    if (pagos.length > 1) {
+      setPagos(pagos.filter((_, i) => i !== index));
+    }
+  };
+
+  const handlePagoChange = (index, field, value) => {
+    const newPagos = [...pagos];
+    newPagos[index][field] = value;
+    setPagos(newPagos);
+  };
+
+  const calcularTotalPagos = () => {
+    return pagos.reduce((sum, pago) => sum + (parseFloat(pago.monto) || 0), 0);
+  };
+
+  const validarPagos = () => {
+    const total = parseFloat(formData.precio) || 0;
+    const sumaPagos = calcularTotalPagos();
+    
+    if (Math.abs(total - sumaPagos) > 0.01) {
+      setErrors({ general: `La suma de los pagos (S/ ${sumaPagos.toFixed(2)}) no coincide con el total (S/ ${total.toFixed(2)})` });
+      return false;
+    }
+    
+    for (let i = 0; i < pagos.length; i++) {
+      if (!pagos[i].metodo_pago_id || !pagos[i].monto || parseFloat(pagos[i].monto) <= 0) {
+        setErrors({ general: `Complete correctamente el pago ${i + 1}` });
+        return false;
+      }
+    }
+    
+    return true;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrors({});
     setSuccessMessage('');
+    
     try {
-      // construimos el payload que el backend sí entiende
-      // 0) Validación mínima
+      // ValidaciÃ³n mÃ­nima
       if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
         return setErrors({ general: 'Ingrese el nombre del cliente.' });
       }
 
-      // 0.1) Resolver cliente_id por nombre (y dni si lo tienes)
-      const clienteId = await ensureCliente(formData.cliente_nombre.trim(), (formData.cliente_dni || '').trim());
+      if (!formData.tipo_servicio_id) {
+        return setErrors({ general: 'Seleccione el tipo de servicio.' });
+      }
 
-      // 1) construir payload “servidos por backend”
-      const payload = buildServicioPayload({ ...formData, cliente_id: clienteId }, tiposServicio);
+      if (!formData.fecha_servicio) {
+        return setErrors({ general: 'Seleccione la fecha del servicio.' });
+      }
 
+      if (!formData.hora_servicio) {
+        return setErrors({ general: 'Seleccione la hora del servicio.' });
+      }
+
+      // Validar pagos
+      if (!validarPagos()) {
+        return;
+      }
+
+      setLoading(true);
+
+      // Resolver cliente_id
+      const clienteId = await ensureCliente(
+        formData.cliente_nombre.trim(), 
+        (formData.cliente_dni || '').trim()
+      );
+
+      // Crear servicio primero
+      const servicioPayload = {
+        tipo_servicio_id: Number(formData.tipo_servicio_id),
+        cliente_id: clienteId,
+        fecha_servicio: formData.fecha_servicio,
+        hora_servicio: formData.hora_servicio,
+        precio: parseFloat(formData.precio),
+        estado: 'programado',
+        observaciones: formData.observaciones || null
+      };
+
+      const servicioResp = await crearServicio(servicioPayload);
+
+      if (!servicioResp.success) {
+        throw new Error(servicioResp.message || 'Error al crear servicio');
+      }
+
+      const servicio_id = servicioResp.data.id;
+
+      // Crear cobro con pagos mÃºltiples
+      const tipoLabel = tiposServicio.find(t => t.value === Number(formData.tipo_servicio_id))?.label || 'Servicio';
       
+      const cobroPayload = {
+        servicio_id,
+        caja_id: null,
+        cliente_nombre: formData.cliente_nombre.trim(),
+        cliente_dni: formData.cliente_dni?.trim() || '',
+        concepto: `Servicio: ${tipoLabel}`,
+        monto: parseFloat(formData.precio),
+        pagos: pagos.map(p => ({
+          metodo_pago_id: parseInt(p.metodo_pago_id),
+          monto: parseFloat(p.monto)
+        })),
+        observaciones: formData.observaciones || null
+      };
 
-      let resp;
-      if (editingServicio) {
-        resp = await actualizarServicio(editingServicio.id, payload);
-      } else {
-        resp = await crearServicio(payload);
+      const token = localStorage.getItem('token');
+      const cobroResp = await fetch('http://localhost:3001/api/cobros', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(cobroPayload)
+      });
+
+      const cobroData = await cobroResp.json();
+
+      if (!cobroData.success) {
+        throw new Error(cobroData.error || 'Error al crear cobro');
       }
 
-      if (resp.success) {
-        setSuccessMessage(editingServicio ? 'Servicio actualizado exitosamente' : 'Servicio creado exitosamente');
-        setShowModal(false);
-        resetForm();
-        loadServicios();
-        loadStats();
-      } else {
-        if (resp.errors) {
-          const errorObj = {};
-          resp.errors.forEach(error => { errorObj[error.field] = error.message; });
-          setErrors(errorObj);
-        } else {
-          setErrors({ general: resp.message || resp.error || 'No se pudo guardar' });
-        }
+      setSuccessMessage('Servicio y cobro registrados exitosamente');
+      
+      // Si se pidiÃ³ imprimir ticket automÃ¡ticamente
+      if (mostrarTicketAuto && cobroData.data.cobro_id) {
+        setTimeout(() => {
+          abrirTicketPDF(cobroData.data.cobro_id);
+        }, 500);
       }
+
+      // Limpiar formulario
+      resetForm();
+      setShowModal(false);
+      loadServicios();
+      loadStats();
+
     } catch (error) {
       console.error('Error al enviar formulario:', error);
-      setErrors({ general: 'Error de conexión' });
+      setErrors({ general: error.message || 'Error de conexiÃ³n' });
+    } finally {
+      setLoading(false);
     }
   };
 
+  const abrirTicketPDF = (cobroId) => {
+    const token = localStorage.getItem('token');
+    
+    // Crear iframe oculto para descargar el PDF con autenticación
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    // Hacer petición con fetch incluyendo el token
+    fetch(`http://localhost:3001/api/cobros/${cobroId}/ticket?hideCliente=1`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    .then(response => response.blob())
+    .then(blob => {
+      // Crear URL del blob y abrirlo en nueva ventana
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      
+      // Limpiar
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(iframe);
+      }, 100);
+    })
+    .catch(error => {
+      console.error('Error al abrir ticket:', error);
+      alert('Error al generar el ticket. Intente nuevamente.');
+      document.body.removeChild(iframe);
+    });
+  };
 
   const handleEdit = (servicio) => {
     setEditingServicio(servicio);
@@ -459,6 +649,8 @@ const Servicios = () => {
     setFormData({
       tipo_servicio_id: '',
       cliente_id: '',
+      cliente_nombre: '',
+      cliente_dni: '',
       fecha_servicio: '',
       hora_servicio: '',
       precio: '',
@@ -472,6 +664,8 @@ const Servicios = () => {
     });
     setEditingServicio(null);
     setErrors({});
+    setPagos([{ metodo_pago_id: '', monto: '' }]); // â† AGREGAR ESTA LÃNEA
+    setMostrarTicketAuto(false); // â† AGREGAR ESTA LÃNEA
   };
   
 
@@ -809,43 +1003,81 @@ const Servicios = () => {
     </div>
 
     {/* Cliente (obligatorio) */}
+<div>
+  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+    Cliente (nombre completo) <span className="text-red-500">*</span>
+  </label>
+  <input
+    type="text"
+    name="cliente_nombre"
+    value={formData.cliente_nombre}
+    onChange={(e) => setFormData({...formData, cliente_nombre: e.target.value})}
+    required
+    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+    placeholder="Nombre completo del cliente"
+  />
+</div>
+
+    {/* DNI (opcional) con botón de búsqueda */}
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Cliente (nombre completo) *
+        DNI (opcional)
       </label>
-      <input
-        type="text"
-        value={formData.cliente_nombre}
-        onChange={(e) => setFormData(prev => ({ ...prev, cliente_nombre: e.target.value }))}
-        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.cliente_nombre ? 'border-red-500' : 'border-gray-300'}`}
-        placeholder="Nombre de la persona que contrata"
-        required
-      />
-    </div>
-    {/* DNI opcional */}
-    <div >
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DNI (opcional)</label>
-      <input
-        type="text"
-        value={formData.cliente_dni}
-        onChange={(e) => setFormData(prev => ({ ...prev, cliente_dni: e.target.value }))}
-        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-        placeholder="DNI"
-      />
+      <div className="flex gap-2">
+        <input
+          type="text"
+          name="cliente_dni"
+          value={formData.cliente_dni}
+          onChange={(e) => setFormData({...formData, cliente_dni: e.target.value.replace(/\D/g, '')})}
+          maxLength="8"
+          className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+          placeholder="DNI (8 dígitos)"
+        />
+        <button
+          type="button"
+          onClick={handleBuscarDNI}
+          disabled={buscandoDNI || !formData.cliente_dni || formData.cliente_dni.length !== 8}
+          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          title="Buscar DNI en RENIEC"
+        >
+          {buscandoDNI ? (
+            <span className="animate-spin">🔄</span>
+          ) : (
+            '🔍'
+          )}
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        Ingrese el DNI y presione el botón para autocompletar el nombre
+      </p>
     </div>
 
 
-    {/* Hora */}
+    {/* Hora del Servicio */}
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Hora del Servicio
+        Hora del Servicio <span className="text-red-500">*</span>
       </label>
-      <input
-        type="time"
+      <select
+        name="hora_servicio"
         value={formData.hora_servicio}
-        onChange={(e) => setFormData(prev => ({ ...prev, hora_servicio: e.target.value }))}
-        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-      />
+        onChange={(e) => setFormData({...formData, hora_servicio: e.target.value})}
+        required
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+      >
+        <option value="">Seleccionar hora</option>
+        {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
+          <option key={`${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
+            {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
+          </option>,
+          <option key={`${hora}:30`} value={`${hora.toString().padStart(2, '0')}:30`}>
+            {`${hora.toString().padStart(2, '0')}:30 ${hora < 12 ? 'AM' : 'PM'}`}
+          </option>
+        ])}
+      </select>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        Horario disponible: 7:00 AM - 9:00 PM (solo en punto o media hora)
+      </p>
     </div>
 
     {/* Precio (S/) */}
@@ -877,19 +1109,89 @@ const Servicios = () => {
     </div>
 
     {/* Forma de Pago */}
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Forma de Pago</label>
-      <select
-        value={formData.forma_pago}
-        onChange={(e) => setFormData(prev => ({ ...prev, forma_pago: e.target.value }))}
-        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-      >
-        <option value="">Seleccionar forma de pago</option>
-        {formasPago.map(forma => (
-          <option key={forma.value} value={forma.value}>{forma.label}</option>
-        ))}
-      </select>
+    <div className="col-span-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        Formas de Pago <span className="text-red-500">*</span>
+      </label>
+      
+      {pagos.map((pago, index) => (
+        <div key={index} className="flex gap-2 mb-2">
+          <select
+            value={pago.metodo_pago_id}
+            onChange={(e) => handlePagoChange(index, 'metodo_pago_id', e.target.value)}
+            required
+            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">Seleccionar método</option>
+            {metodosPago.map(metodo => (
+              <option key={metodo.id} value={metodo.id}>
+                {metodo.nombre}
+              </option>
+            ))}
+          </select>
+          
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={pago.monto}
+            onChange={(e) => handlePagoChange(index, 'monto', e.target.value)}
+            placeholder="Monto"
+            required
+            className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+          />
+          
+          {pagos.length > 1 && (
+            <button
+              type="button"
+              onClick={() => eliminarPago(index)}
+              className="px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+              title="Eliminar forma de pago"
+            >
+              🗑️
+            </button>
+          )}
+        </div>
+      ))}
+      
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+        <div className="text-sm">
+          {pagos.length < 2 && (
+            <button
+              type="button"
+              onClick={agregarPago}
+              className="text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium"
+            >
+              + Agregar forma de pago
+            </button>
+          )}
+        </div>
+        <div className="text-sm">
+          <span className="font-semibold">Total pagos: S/ {calcularTotalPagos().toFixed(2)}</span>
+          {formData.precio && (
+            <span className={`ml-2 ${Math.abs(calcularTotalPagos() - parseFloat(formData.precio)) < 0.01 ? 'text-green-600' : 'text-red-600'}`}>
+              {Math.abs(calcularTotalPagos() - parseFloat(formData.precio)) < 0.01 ? '✓ Coincide' : '⚠️ No coincide'}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
+
+    {/* Checkbox imprimir ticket */}
+    <div className="col-span-2">
+      <label className="flex items-center space-x-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={mostrarTicketAuto}
+          onChange={(e) => setMostrarTicketAuto(e.target.checked)}
+          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+        />
+        <span className="text-sm text-gray-700 dark:text-gray-300">
+          Imprimir ticket automáticamente
+        </span>
+      </label>
+    </div>
+
 
     {/* Campos de operación si ≠ efectivo */}
     {formData.forma_pago && formData.forma_pago !== 'efectivo' && (
@@ -964,66 +1266,6 @@ const Servicios = () => {
       {editingServicio ? 'Actualizar' : 'Crear'}
     </button>
 
-    <button
-      type="button"
-      onClick={async () => {
-        // Dispara el submit estándar, pero con “imprimir” luego de crear/actualizar
-        try {
-          // 1) Guardar/actualizar
-          if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
-            return setErrors({ general: 'Ingrese el nombre del cliente para imprimir.' });
-          }
-          const clienteId = await ensureCliente(formData.cliente_nombre.trim(), (formData.cliente_dni || '').trim());
-          const payload = buildServicioPayload({ ...formData, cliente_id: clienteId }, tiposServicio);
-          
-          const resp = editingServicio
-            ? await actualizarServicio(editingServicio.id, payload)
-            : await crearServicio(payload);
-
-          if (!resp.success) {
-            if (resp.errors) {
-              const errorObj = {}; resp.errors.forEach(e => errorObj[e.field] = e.message);
-              return setErrors(errorObj);
-            }
-            return setErrors({ general: resp.message || resp.error || 'No se pudo guardar' });
-          }
-
-          // 2) Obtener servicio id para cobrar
-          const servicioId = editingServicio ? editingServicio.id : resp.data.id;
-          const servicio = {
-            id: servicioId,
-            cliente_id: payload.cliente_id || 1,
-            precio: payload.precio,
-            tipo_servicio_id: payload.tipo_servicio_id
-          };
-
-          // Validaciones rápidas
-          if (!servicio.precio || Number(servicio.precio) <= 0)
-            return setErrors({ general: 'Defina un precio válido antes de imprimir.' });
-          if (!payload.forma_pago)
-            return setErrors({ general: 'Seleccione la forma de pago para imprimir el ticket.' });
-
-          // 3) Cobrar + abrir ticket
-          const metodo_pago_id = resolveMetodoPagoId(formasPago, payload.forma_pago);
-          const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
-          const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
-          await abrirTicketCobroHtml(r.data.id);
-
-          // 4) Cerrar y refrescar
-          setSuccessMessage(editingServicio ? 'Servicio actualizado e impreso' : 'Servicio creado e impreso');
-          setShowModal(false);
-          resetForm();
-          loadServicios();
-          loadStats();
-        } catch (err) {
-          console.error(err);
-          setErrors({ general: 'No se pudo crear/imprimir el ticket.' });
-        }
-      }}
-      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-    >
-      {editingServicio ? 'Actualizar + Ticket' : 'Crear + Ticket'}
-    </button>
 
   </div>
 </form>

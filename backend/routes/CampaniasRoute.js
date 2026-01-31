@@ -42,4 +42,19 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
+// Toggle estado
+router.patch('/:id/toggle', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.query(
+      'UPDATE campanias SET estado = IF(estado = "ACTIVA", "INACTIVA", "ACTIVA") WHERE id = ?',
+      [id]
+    );
+    res.json({ message: 'Estado actualizado' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al cambiar estado' });
+  }
+});
+
 module.exports = router;

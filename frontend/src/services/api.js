@@ -158,5 +158,12 @@ familiasService.getLabelsByZona = (zona_id) =>
 familiasService.getIntegrantes = (familiaId) =>
   api.get(`/familias/${familiaId}/integrantes`).then(r => r.data);
 
+// --- Configuración del Sistema ---
+export const configuracionService = {
+  get: (clave) => api.get(`/configuracion/${clave}`).then(r => r.data),
+  update: (clave, valor) => api.put(`/configuracion/${clave}`, { valor }).then(r => r.data),
+  getAll: () => api.get('/configuracion').then(r => r.data),
+};
+
 // Exportar API base
 export default api;

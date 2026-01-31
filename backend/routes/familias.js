@@ -2,25 +2,9 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 //const XLSX = require('xlsx');
+const pool = require('../config/db'); // ✅ Usar pool centralizado
 const path = require('path');
 const fs = require('fs');
-
-// Función para obtener el pool de conexiones
-const getPool = () => {
-  const mysql = require('mysql2/promise');
-  const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pnsr_db',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-  };
-  return mysql.createPool(dbConfig);
-};
-
-const pool = getPool();
 
 // Configuración de multer para subida de archivos
 const storage = multer.diskStorage({
@@ -120,39 +104,41 @@ router.get('/', authenticateToken, async (req, res) => {
       const searchTerm = `%${search}%`;
       queryParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
+
+    // Filtro por rango de códigos
+    if (req.query.codigo_desde && req.query.codigo_hasta) {
+      whereConditions.push('f.codigo_unico >= ? AND f.codigo_unico <= ?');
+      queryParams.push(req.query.codigo_desde, req.query.codigo_hasta);
+    }
     
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
     
     // Consulta principal con paginación
     const offset = (page - 1) * limit;
-    const [rows] = await pool.execute(`
-      SELECT 
-        f.id,
-        f.codigo_unico,
-        f.nombre_padre,
-        f.nombre_madre,
-        f.direccion,
-        f.zona_id,
-        f.telefono,
-        f.observaciones,
-        f.activo,
-        f.created_at,
-        f.updated_at,
-        z.nombre as zona_nombre,
-        z.abreviatura as zona_abreviatura,
-        COUNT(inf.id) as total_integrantes,
-        COUNT(c.id) as total_cajas
-      FROM familias f
-      LEFT JOIN zonas z ON f.zona_id = z.id
-      LEFT JOIN integrantes_familia inf ON f.id = inf.familia_id
-      LEFT JOIN cajas c ON f.id = c.familia_id
-      ${whereClause}
-      GROUP BY f.id, f.codigo_unico, f.nombre_padre, f.nombre_madre, f.direccion, 
-              f.zona_id, f.telefono, f.observaciones, f.activo, f.created_at, f.updated_at,
-              z.nombre, z.abreviatura
-      ORDER BY f.codigo_unico
-      LIMIT ? OFFSET ?
-    `, [...queryParams, parseInt(limit), parseInt(offset)]);
+
+const [rows] = await pool.execute(`
+  SELECT 
+    f.id,
+    f.codigo_unico,
+    f.nombre_padre,
+    f.nombre_madre,
+    f.direccion,
+    f.zona_id,
+    f.telefono,
+    f.observaciones,
+    f.activo,
+    f.created_at,
+    f.updated_at,
+    z.nombre as zona_nombre,
+    z.abreviatura as zona_abreviatura,
+    0 as total_integrantes,
+    0 as total_cajas
+  FROM familias f
+  LEFT JOIN zonas z ON f.zona_id = z.id
+  ${whereClause}
+  ORDER BY f.codigo_unico
+  LIMIT ? OFFSET ?
+`, [...queryParams, parseInt(limit), parseInt(offset)]);
 
     // Contar total de registros
     const [countRows] = await pool.execute(`
@@ -185,6 +171,8 @@ router.get('/', authenticateToken, async (req, res) => {
     });
   }
 });
+
+
 
 // Obtener estadísticas de familias
 router.get('/stats', authenticateToken, async (req, res) => {
@@ -325,7 +313,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Obtener integrantes de la familia
     const [integrantesRows] = await pool.execute(`
-      SELECT id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      SELECT id, familia_id, nombre, fecha_nacimiento, edad_texto, relacion, sexo, observaciones
       FROM integrantes_familia 
       WHERE familia_id = ? 
       ORDER BY 
