@@ -1,6 +1,6 @@
 // frontend/src/components/Configuracion/RolModal.jsx
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { rolesService } from '../../services/api'; // ✅ CAMBIO: Usar servicio centralizado
 
 const RolModal = ({ rol, onClose, onSave }) => {
   const [formData, setFormData] = useState({
@@ -54,17 +54,13 @@ const RolModal = ({ rol, onClose, onSave }) => {
     setLoading(true);
 
     try {
-      const token = localStorage.getItem('token');
-      const config = {
-        headers: { Authorization: `Bearer ${token}` }
-      };
-
+      // ✅ CAMBIO: Usar rolesService
       if (rol) {
         // Actualizar rol existente
-        await axios.put(`http://localhost:3001/api/roles/${rol.id}`, formData, config);
+        await rolesService.update(rol.id, formData);
       } else {
         // Crear nuevo rol
-        await axios.post('http://localhost:3001/api/roles', formData, config);
+        await rolesService.create(formData);
       }
 
       onSave();

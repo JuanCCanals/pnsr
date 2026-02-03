@@ -165,5 +165,24 @@ export const configuracionService = {
   getAll: () => api.get('/configuracion').then(r => r.data),
 };
 
+// --- Roles y Permisos ---
+export const rolesService = {
+  // Roles
+  getAll: () => api.get('/roles').then(r => r.data),
+  getById: (id) => api.get(`/roles/${id}`).then(r => r.data),
+  create: (data) => api.post('/roles', data).then(r => r.data),
+  update: (id, data) => api.put(`/roles/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/roles/${id}`).then(r => r.data),
+  
+  // Permisos de un rol
+  getPermisos: (rolId) => api.get(`/roles/${rolId}/permisos`).then(r => r.data),
+  updatePermisos: (rolId, permisos) => api.put(`/roles/${rolId}/permisos`, { permisos }).then(r => r.data),
+};
+
+// --- Métodos de Pago ---
+export const metodoPagoService = {
+  getAll: () => api.get('/metodos-pago').then(r => r.data)
+};
+
 // Exportar API base
 export default api;

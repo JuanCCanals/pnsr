@@ -1,6 +1,6 @@
 // frontend/src/components/Configuracion/RolesPermisosTab.jsx
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { rolesService } from '../../services/api'; // ✅ CAMBIO: Usar servicio centralizado
 import RolModal from './RolModal';
 import PermisosModal from './PermisosModal';
 
@@ -19,13 +19,11 @@ const RolesPermisosTab = () => {
   const loadRoles = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      const response = await axios.get('http://localhost:3001/api/roles', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      // ✅ CAMBIO: Usar rolesService en lugar de axios directo
+      const response = await rolesService.getAll();
       
-      if (response.data.success) {
-        setRoles(response.data.data);
+      if (response.success) {
+        setRoles(response.data);
       }
     } catch (error) {
       console.error('Error cargando roles:', error);
@@ -61,10 +59,8 @@ const RolesPermisosTab = () => {
     }
 
     try {
-      const token = localStorage.getItem('token');
-      await axios.delete(`http://localhost:3001/api/roles/${rol.id}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      // ✅ CAMBIO: Usar rolesService
+      await rolesService.delete(rol.id);
       
       alert('Rol eliminado exitosamente');
       loadRoles();

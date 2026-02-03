@@ -1,6 +1,6 @@
 // frontend/src/components/Configuracion/PermisosModal.jsx
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { rolesService } from '../../services/api'; // ✅ CAMBIO: Usar servicio centralizado
 
 const PermisosModal = ({ rol, onClose, onSave }) => {
   const [modulos, setModulos] = useState([]);
@@ -16,20 +16,16 @@ const PermisosModal = ({ rol, onClose, onSave }) => {
   const loadPermisosData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      const config = {
-        headers: { Authorization: `Bearer ${token}` }
-      };
 
-      // Cargar permisos del rol con información de módulos
-      const response = await axios.get(`http://localhost:3001/api/roles/${rol.id}/permisos`, config);
+      // ✅ CAMBIO: Usar rolesService
+      const response = await rolesService.getPermisos(rol.id);
       
-      if (response.data.success) {
-        setModulos(response.data.data);
+      if (response.success) {
+        setModulos(response.data);
         
         // Crear set con los permisos ya asignados
         const asignados = new Set();
-        response.data.data.forEach(modulo => {
+        response.data.forEach(modulo => {
           modulo.permisos.forEach(permiso => {
             if (permiso.asignado) {
               asignados.add(permiso.permiso_id);
@@ -79,12 +75,8 @@ const PermisosModal = ({ rol, onClose, onSave }) => {
     setError('');
 
     try {
-      const token = localStorage.getItem('token');
-      await axios.put(
-        `http://localhost:3001/api/roles/${rol.id}/permisos`,
-        { permisos: Array.from(permisosSeleccionados) },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // ✅ CAMBIO: Usar rolesService
+      await rolesService.updatePermisos(rol.id, Array.from(permisosSeleccionados));
 
       onSave();
     } catch (error) {
@@ -103,7 +95,7 @@ const PermisosModal = ({ rol, onClose, onSave }) => {
       exportar: '📥',
       importar: '📤'
     };
-    return icons[accion] || '●';
+    return icons[accion] || '◼';
   };
 
   const getAccionLabel = (accion) => {

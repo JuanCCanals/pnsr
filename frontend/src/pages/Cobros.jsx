@@ -1,6 +1,6 @@
 // frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect } from 'react';
-import { cobrosService } from '../services/api'; // arriba con el resto de imports
+import { cobrosService, metodoPagoService } from '../services/api'; // ✅ CORREGIDO
 import { consultarDNI } from '../services/dniService'; // â† AGREGAR ESTA LÃNEA
 // import { useAuth } from '../contexts/AuthContext'; // Si no lo usas, déjalo comentado
 
@@ -317,18 +317,16 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
   const loadMetodosPago = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3001/api/metodos-pago', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await response.json();
-      if (data.success) {
-        setMetodosPago(data.data);
+      // ✅ CORREGIDO: Usar metodoPagoService en lugar de fetch directo
+      const response = await metodoPagoService.getAll();
+      if (response.success) {
+        setMetodosPago(response.data);
       }
     } catch (error) {
-      console.error('Error cargando mÃ©todos de pago:', error);
+      console.error('Error cargando métodos de pago:', error);
     }
   };
+
 
   // ========== BÃšSQUEDA DNI ==========
   const handleBuscarDNI = async () => {
@@ -469,17 +467,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         observaciones: formData.observaciones || null
       };
 
-      const token = localStorage.getItem('token');
-      const cobroResp = await fetch('http://localhost:3001/api/cobros', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(cobroPayload)
-      });
-
-      const cobroData = await cobroResp.json();
+      // ✅ CORREGIDO: Usar cobrosService.crear en lugar de fetch directo
+      const cobroData = await cobrosService.crear(cobroPayload);
 
       if (!cobroData.success) {
         throw new Error(cobroData.error || 'Error al crear cobro');
@@ -509,38 +498,10 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
   };
 
   const abrirTicketPDF = (cobroId) => {
-    const token = localStorage.getItem('token');
-    
-    // Crear iframe oculto para descargar el PDF con autenticación
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-    
-    // Hacer petición con fetch incluyendo el token
-    fetch(`http://localhost:3001/api/cobros/${cobroId}/ticket?hideCliente=1`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-    .then(response => response.blob())
-    .then(blob => {
-      // Crear URL del blob y abrirlo en nueva ventana
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      
-      // Limpiar
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(iframe);
-      }, 100);
-    })
-    .catch(error => {
-      console.error('Error al abrir ticket:', error);
-      alert('Error al generar el ticket. Intente nuevamente.');
-      document.body.removeChild(iframe);
-    });
+    // ✅ CORREGIDO: Usar cobrosService.openTicketPdf
+    cobrosService.openTicketPdf(cobroId, { hideCliente: 1 });
   };
+
 
   const handleEdit = (servicio) => {
     setEditingServicio(servicio);
