@@ -8,6 +8,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 const PDFDocument = require('pdfkit');
 
 // ===================================================================
@@ -76,7 +77,7 @@ async function ensureCliente(connection, nombre, dni = '') {
  * POST /api/cobros/ensure-cliente
  * Asegurar cliente por nombre/dni y devolver su id
  */
-router.post('/ensure-cliente', authenticateToken, async (req, res) => {
+router.post('/ensure-cliente', authenticateToken, authorizePermission('registrar-servicios.crear'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const { nombre = '', dni = '' } = req.body || {};
@@ -94,7 +95,7 @@ router.post('/ensure-cliente', authenticateToken, async (req, res) => {
  * POST /api/cobros
  * Crear cobro con soporte de pagos múltiples
  */
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('registrar-servicios.crear'), async (req, res) => {
   const connection = await pool.getConnection();
   
   try {
@@ -213,7 +214,7 @@ router.post('/', authenticateToken, async (req, res) => {
  * GET /api/cobros/:id
  * Obtener cobro por ID
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.leer'), async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -260,7 +261,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * GET /api/cobros/:id/ticket
  * Generar ticket PDF 80mm según modelo
  */
-router.get('/:id/ticket', authenticateToken, async (req, res) => {
+router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-servicios.leer'), async (req, res) => {
   try {
     const { id } = req.params;
     const { hideCliente = '1' } = req.query;

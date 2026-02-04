@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const auth = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // Obtener campañas
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, authorizePermission('campanias', 'leer'), async (req, res) => {
   try {
     const [rows] = await db.query('SELECT * FROM campanias ORDER BY anio DESC');
     res.json(rows);
@@ -15,7 +16,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // Crear campaña
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, authorizePermission('campanias', 'crear'), async (req, res) => {
   try {
     const { anio, nombre, descripcion, fecha_inicio, fecha_fin } = req.body;
     await db.query('INSERT INTO campanias (anio, nombre, descripcion, fecha_inicio, fecha_fin) VALUES (?,?,?,?,?)',
@@ -29,7 +30,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // Actualizar campaña
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, authorizePermission('campanias', 'actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre, descripcion, estado, fecha_inicio, fecha_fin } = req.body;
@@ -43,7 +44,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // Toggle estado
-router.patch('/:id/toggle', auth, async (req, res) => {
+router.patch('/:id/toggle', auth, authorizePermission('campanias', 'actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     await db.query(

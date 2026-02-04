@@ -225,36 +225,95 @@ export const AuthProvider = ({ children }) => {
     dispatch({ type: AUTH_ACTIONS.CLEAR_ERROR });
   };
 
-  // Verificar si el usuario tiene un rol específico
+  // Verificar si el usuario tiene un rol específico (legacy)
   const hasRole = (role) => {
     if (!state.user) return false;
     if (Array.isArray(role)) {
-      return role.includes(state.user.rol);
+      return role.includes(state.user.rol?.slug || state.user.rol);
     }
-    return state.user.rol === role;
+    return (state.user.rol?.slug || state.user.rol) === role;
   };
 
-  // Verificar si el usuario es administrador
-  const isAdmin = () => hasRole('admin');
+  // Verificar si el usuario es administrador (usa nuevo sistema RBAC)
+  const isAdmin = () => {
+    if (!state.user) return false;
+    // Verificar es_admin del nuevo sistema RBAC
+    if (state.user.rol?.es_admin === true || state.user.rol?.es_admin === 1) return true;
+    // Fallback al sistema legacy
+    return (state.user.rol?.slug || state.user.rol) === 'admin';
+  };
 
   // Verificar si el usuario es operador o admin
-  const canOperate = () => hasRole(['admin', 'operador']);
+  const canOperate = () => isAdmin() || hasRole(['operador', 'supervisor']);
+
+  /**
+   * Verificar si el usuario tiene un permiso específico (RBAC)
+   * @param {string} modulo - Slug del módulo (ej: 'familias', 'zonas')
+   * @param {string} accion - Acción requerida ('leer', 'crear', 'actualizar', 'eliminar')
+   * @returns {boolean}
+   */
+  const hasPermission = (modulo, accion = 'leer') => {
+    if (!state.user) return false;
+
+    // Admin tiene acceso total
+    if (isAdmin()) return true;
+
+    // Verificar en array de permisos (formato: modulo_accion)
+    const permisos = state.user.permisos || [];
+    const permisoSlug = `${modulo}_${accion}`;
+
+    // Verificar permiso exacto
+    if (permisos.includes(permisoSlug)) return true;
+
+    // También verificar formato con punto (por compatibilidad)
+    if (permisos.includes(`${modulo}.${accion}`)) return true;
+
+    // Verificar en array de módulos (estructura alternativa)
+    const modulos = state.user.modulos || [];
+    const moduloData = modulos.find(m => m.slug === modulo);
+    if (moduloData && moduloData.permisos?.includes(accion)) return true;
+
+    return false;
+  };
+
+  /**
+   * Verificar si el usuario tiene acceso a un módulo (cualquier permiso)
+   * @param {string} modulo - Slug del módulo
+   * @returns {boolean}
+   */
+  const canAccessModule = (modulo) => {
+    if (!state.user) return false;
+    if (isAdmin()) return true;
+
+    // Verificar si tiene cualquier permiso del módulo
+    const permisos = state.user.permisos || [];
+    const tienePermiso = permisos.some(p => p.startsWith(`${modulo}_`) || p.startsWith(`${modulo}.`));
+    if (tienePermiso) return true;
+
+    // Verificar en módulos
+    const modulos = state.user.modulos || [];
+    return modulos.some(m => m.slug === modulo);
+  };
 
   const value = {
     // Estado
     ...state,
-    
+
     // Funciones
     login,
     logout,
     updateProfile,
     changePassword,
     clearError,
-    
-    // Utilidades
+
+    // Utilidades de rol (legacy)
     hasRole,
     isAdmin,
     canOperate,
+
+    // Utilidades de permisos (RBAC)
+    hasPermission,
+    canAccessModule,
   };
 
   return (

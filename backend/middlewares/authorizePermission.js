@@ -140,13 +140,16 @@ function authorizePermission(requiredPermissions) {
       // Verificar si el usuario tiene al menos uno de los permisos requeridos
       const hasPermission = permissions.some(perm => {
         // Si el permiso es solo el módulo (ej: 'zonas'), verificar si tiene algún permiso de ese módulo
-        if (!perm.includes('.')) {
-          // Verificar si tiene algún permiso que empiece con el módulo
-          return Array.from(userPermissions).some(up => up.startsWith(`${perm}.`));
+        if (!perm.includes('.') && !perm.includes('_')) {
+          // Verificar si tiene algún permiso que empiece con el módulo (formato: modulo_accion)
+          return Array.from(userPermissions).some(up => up.startsWith(`${perm}_`));
         }
-        
-        // Verificar permiso exacto
-        return userPermissions.has(perm);
+
+        // Convertir formato 'modulo.accion' a 'modulo_accion' para compatibilidad
+        const permSlug = perm.replace('.', '_');
+
+        // Verificar permiso exacto (buscar tanto con punto como con guión bajo)
+        return userPermissions.has(permSlug) || userPermissions.has(perm);
       });
 
       if (!hasPermission) {
@@ -194,10 +197,13 @@ async function hasPermission(userId, permissions) {
     const userPerms = await getUserPermissions(userId);
 
     return perms.some(perm => {
-      if (!perm.includes('.')) {
-        return Array.from(userPerms).some(up => up.startsWith(`${perm}.`));
+      // Si es solo el módulo (sin separador)
+      if (!perm.includes('.') && !perm.includes('_')) {
+        return Array.from(userPerms).some(up => up.startsWith(`${perm}_`));
       }
-      return userPerms.has(perm);
+      // Convertir formato 'modulo.accion' a 'modulo_accion'
+      const permSlug = perm.replace('.', '_');
+      return userPerms.has(permSlug) || userPerms.has(perm);
     });
   } catch (error) {
     console.error('Error verificando permiso:', error);

@@ -1,45 +1,8 @@
 const express = require('express');
 const router = express.Router();
-
-// Función para obtener el pool de conexiones
-const getPool = () => {
-  const mysql = require('mysql2/promise');
-  const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'pnsr_db',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-  };
-  return mysql.createPool(dbConfig);
-};
-
-const pool = getPool();
-
-// Middleware de autenticación simplificado
-const authenticateToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Token de acceso requerido'
-      });
-    }
-
-    req.user = { id: 1, rol: 'admin' };
-    next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      error: 'Token inválido'
-    });
-  }
-};
+const pool = require('../config/db');
+const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // Función para generar código de caja
 const generarCodigoCaja = async () => {
@@ -57,7 +20,7 @@ const generarCodigoCaja = async () => {
 // ==================== RUTAS DE CAJAS ====================
 
 // Obtener todas las cajas con filtros
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const { 
       estado, 
@@ -179,7 +142,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Obtener estadísticas de cajas
-router.get('/stats', authenticateToken, async (req, res) => {
+router.get('/stats', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const [totalRows] = await pool.execute('SELECT COUNT(*) as total FROM cajas');
     
@@ -257,7 +220,7 @@ router.get('/stats', authenticateToken, async (req, res) => {
 });
 
 // Obtener una caja por ID
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -321,7 +284,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Crear nueva caja
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), async (req, res) => {
   try {
     const { familia_id, observaciones } = req.body;
 
@@ -390,7 +353,7 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // Crear cajas masivamente para todas las familias activas sin caja
-router.post('/crear-masivo', authenticateToken, async (req, res) => {
+router.post('/crear-masivo', authenticateToken, authorizePermission('venta_cajas.crear'), async (req, res) => {
   try {
     const { zona_id, sobrescribir = false } = req.body;
 
@@ -482,7 +445,7 @@ router.post('/crear-masivo', authenticateToken, async (req, res) => {
 });
 
 // Asignar caja a benefactor
-router.post('/:id/asignar', authenticateToken, async (req, res) => {
+router.post('/:id/asignar', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { benefactor_id, observaciones } = req.body;
@@ -548,7 +511,7 @@ router.post('/:id/asignar', authenticateToken, async (req, res) => {
 });
 
 // Marcar caja como entregada a benefactor
-router.post('/:id/entregar-benefactor', authenticateToken, async (req, res) => {
+router.post('/:id/entregar-benefactor', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones } = req.body;
@@ -601,7 +564,7 @@ router.post('/:id/entregar-benefactor', authenticateToken, async (req, res) => {
 });
 
 // Marcar caja como devuelta por benefactor
-router.post('/:id/devolver', authenticateToken, async (req, res) => {
+router.post('/:id/devolver', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones } = req.body;
@@ -647,7 +610,7 @@ router.post('/:id/devolver', authenticateToken, async (req, res) => {
 });
 
 // Liberar caja (quitar asignación)
-router.post('/:id/liberar', authenticateToken, async (req, res) => {
+router.post('/:id/liberar', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones } = req.body;
@@ -700,7 +663,7 @@ router.post('/:id/liberar', authenticateToken, async (req, res) => {
 });
 
 // Actualizar observaciones de caja
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones } = req.body;
@@ -739,7 +702,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 });
 
 // Eliminar caja
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('venta_cajas.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -785,7 +748,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Obtener historial de cambios de estado de una caja
-router.get('/:id/historial', authenticateToken, async (req, res) => {
+router.get('/:id/historial', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 

@@ -53,13 +53,13 @@ export default function ProtectedRoute({ children, requiredRole, requiredPerm })
     // Si permSlug es un array, verificar que tenga al menos uno
     if (Array.isArray(permSlug)) {
       return permSlug.some(p => {
-        // Verificar si tiene algún permiso que empiece con el slug del módulo
-        return user.permisos?.some(up => up.startsWith(`${p}.`));
+        // Verificar si tiene algún permiso que empiece con el slug del módulo (formato: modulo_accion)
+        return user.permisos?.some(up => up.startsWith(`${p}_`) || up.startsWith(`${p}.`));
       });
     }
 
-    // Verificar si tiene algún permiso que empiece con el slug del módulo
-    return user.permisos?.some(p => p.startsWith(`${permSlug}.`)) || false;
+    // Verificar si tiene algún permiso que empiece con el slug del módulo (formato: modulo_accion)
+    return user.permisos?.some(p => p.startsWith(`${permSlug}_`) || p.startsWith(`${permSlug}.`)) || false;
   };
 
   // ✅ ACTUALIZADO: Check por rol (ahora maneja objeto)

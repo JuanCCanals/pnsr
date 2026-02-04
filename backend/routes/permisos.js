@@ -14,7 +14,7 @@ const authorizePermission = require('../middlewares/authorizePermission');
  * GET /api/permisos
  * Obtener todos los permisos disponibles
  */
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('usuarios', 'leer'), async (req, res) => {
   try {
     const [permisos] = await pool.execute(
       'SELECT id, modulo, nombre, descripcion, activo, created_at FROM permisos ORDER BY modulo, nombre'
@@ -37,7 +37,7 @@ router.get('/', authenticateToken, async (req, res) => {
  * GET /api/permisos/:id
  * Obtener un permiso específico
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('usuarios', 'leer'), async (req, res) => {
   try {
     const { id } = req.params;
 

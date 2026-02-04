@@ -7,12 +7,13 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // GET /api/comprobantes
 // Lista combinada de comprobantes de:
 // - Servicios (tabla cobros + servicios + tipos_servicio)
 // - Cajas (tabla ventas + benefactores)
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), async (req, res) => {
   try {
     // Por defecto últimos 90 días (se puede ajustar con ?dias=)
     const dias = parseInt(req.query.dias || '90', 10);

@@ -3,6 +3,9 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
+
+// Módulo: servicios (modulo_id = 10 en BD)
 
 // helpers
 const norm = v => (v ?? '').toString().trim();
@@ -10,7 +13,7 @@ const toInt = v => Number.parseInt(v, 10);
 
 // ========= CONFIG =========
 // GET /api/servicios/config/tipos  -> lee de tipos_servicio
-router.get('/config/tipos', authenticateToken, async (_req, res) => {
+router.get('/config/tipos', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT id AS value, nombre AS label, precio_base
@@ -25,29 +28,8 @@ router.get('/config/tipos', authenticateToken, async (_req, res) => {
   }
 });
 
-const DEFAULT_FORMAS_PAGO = [
-  { value:'efectivo',      label:'Efectivo' },
-  { value:'yape',          label:'Yape' },
-  { value:'plin',          label:'Plin' },
-  { value:'transferencia', label:'Transferencia' },
-  { value:'interbancario', label:'Interbancario' },
-];
-
-const loadFormasPago = async () => {
-  try {
-    const resp = await getFormasPagoConfig();
-    if (resp?.success && Array.isArray(resp.data) && resp.data.length) {
-      setFormasPago(resp.data);
-    } else {
-      setFormasPago(DEFAULT_FORMAS_PAGO);
-    }
-  } catch {
-    setFormasPago(DEFAULT_FORMAS_PAGO);
-  }
-};
-
 // GET /api/servicios/config/formas-pago
-router.get('/config/formas-pago', authenticateToken, async (_req, res) => {
+router.get('/config/formas-pago', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
   // Igual que Gestión
   const data = [
     { value:'efectivo',      label:'Efectivo' },
@@ -61,7 +43,7 @@ router.get('/config/formas-pago', authenticateToken, async (_req, res) => {
 
 // ========= LISTADO & STATS =========
 // GET /api/servicios?search=&tipo_servicio_id=&cliente_id=&estado=&desde=&hasta=&page=1&limit=20
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), async (req, res) => {
   try {
     const search = norm(req.query.search);
     const tipoId = norm(req.query.tipo_servicio_id);
@@ -124,7 +106,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // GET /api/servicios/stats  -> totales por estado y monto realizado
-router.get('/stats', authenticateToken, async (_req, res) => {
+router.get('/stats', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
   try {
     const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM servicios`);
     const [[{ programados }]] = await pool.query(`SELECT COUNT(*) AS programados FROM servicios WHERE estado='programado'`);
@@ -140,7 +122,7 @@ router.get('/stats', authenticateToken, async (_req, res) => {
 
 // ========= CRUD =========
 // POST /api/servicios
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('servicios', 'crear'), async (req, res) => {
   try {
     let {
       tipo_servicio_id,        // required (number)
@@ -206,7 +188,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
 
 // PUT /api/servicios/:id
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -234,7 +216,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 });
 
 // DELETE /api/servicios/:id
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('servicios', 'eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
     const [exist] = await pool.query(`SELECT * FROM servicios WHERE id=?`, [id]);
@@ -250,7 +232,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
 // ========= ACCIONES DE ESTADO =========
 // POST /api/servicios/:id/marcar-realizado
-router.post('/:id/marcar-realizado', authenticateToken, async (req, res) => {
+router.post('/:id/marcar-realizado', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     await pool.execute(`UPDATE servicios SET estado='realizado' WHERE id=?`, [id]);
@@ -262,7 +244,7 @@ router.post('/:id/marcar-realizado', authenticateToken, async (req, res) => {
 });
 
 // POST /api/servicios/:id/cancelar  { observaciones? }
-router.post('/:id/cancelar', authenticateToken, async (req, res) => {
+router.post('/:id/cancelar', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones=null } = req.body || {};

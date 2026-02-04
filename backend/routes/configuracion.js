@@ -3,9 +3,10 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // GET /api/configuracion/:clave
-router.get('/:clave', authenticateToken, async (req, res) => {
+router.get('/:clave', authenticateToken, authorizePermission('configuracion', 'leer'), async (req, res) => {
   try {
     const { clave } = req.params;
     const [rows] = await pool.query(
@@ -25,7 +26,7 @@ router.get('/:clave', authenticateToken, async (req, res) => {
 });
 
 // PUT /api/configuracion/:clave
-router.put('/:clave', authenticateToken, async (req, res) => {
+router.put('/:clave', authenticateToken, authorizePermission('configuracion', 'actualizar'), async (req, res) => {
   try {
     const { clave } = req.params;
     const { valor } = req.body;

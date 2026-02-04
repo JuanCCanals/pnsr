@@ -5,6 +5,8 @@ const multer = require('multer');
 const pool = require('../config/db'); // ✅ Usar pool centralizado
 const path = require('path');
 const fs = require('fs');
+const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // Configuración de multer para subida de archivos
 const storage = multer.diskStorage({
@@ -36,29 +38,8 @@ const upload = multer({
   }
 });
 
-// Middleware de autenticación simplificado
-const authenticateToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Token de acceso requerido'
-      });
-    }
-
-    // Mock user para desarrollo
-    req.user = { id: 1, rol: 'admin' };
-    next();
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      error: 'Token inválido'
-    });
-  }
-};
+// Middleware de autenticación importado desde ../middlewares/auth.js
+// Middleware de autorización importado desde ../middlewares/authorizePermission.js
 
 // Función para generar código único de familia
 const generarCodigoFamilia = async (zonaAbreviatura, numeroFamilia) => {
@@ -77,7 +58,7 @@ const calcularFechaNacimiento = (edad) => {
 // ==================== RUTAS DE FAMILIAS ====================
 
 // Obtener todas las familias
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
     const { zona_id, activo, search, page = 1, limit = 50 } = req.query;
     
@@ -175,7 +156,7 @@ const [rows] = await pool.execute(`
 
 
 // Obtener estadísticas de familias
-router.get('/stats', authenticateToken, async (req, res) => {
+router.get('/stats', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
     const [totalRows] = await pool.execute('SELECT COUNT(*) as total FROM familias');
     const [activasRows] = await pool.execute('SELECT COUNT(*) as activas FROM familias WHERE activo = 1');
@@ -220,7 +201,7 @@ router.get('/stats', authenticateToken, async (req, res) => {
 
 // === ETIQUETAS POR ZONA (bulk) ===
 // DEBE IR ANTES de `/:id` para que Express no lo capture como {id: "labels"}
-router.get('/labels/bulk', authenticateToken, async (req, res) => {
+router.get('/labels/bulk', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
     const { zona_id } = req.query;
     if (!zona_id) {
@@ -287,7 +268,7 @@ router.get('/labels/bulk', authenticateToken, async (req, res) => {
 
 
 // Obtener una familia por ID con integrantes
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -351,7 +332,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Crear nueva familia
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('familias.crear'), async (req, res) => {
   try {
     const { 
       nombre_padre, 
@@ -468,7 +449,7 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // Importar familias desde Excel
-router.post('/import-excel', authenticateToken, upload.single('archivo'), async (req, res) => {
+router.post('/import-excel', authenticateToken, authorizePermission('familias.crear'), upload.single('archivo'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -680,7 +661,7 @@ router.post('/import-excel', authenticateToken, upload.single('archivo'), async 
 });
 
 // Actualizar familia
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('familias.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre_padre, nombre_madre, direccion, zona_id, telefono, observaciones, activo } = req.body;
@@ -754,7 +735,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 });
 
 // Cambiar estado de familia (activar/desactivar)
-router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
+router.patch('/:id/toggle-status', authenticateToken, authorizePermission('familias.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -794,7 +775,7 @@ router.patch('/:id/toggle-status', authenticateToken, async (req, res) => {
 });
 
 // Eliminar familia
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('familias.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -864,7 +845,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Obtener integrantes de una familia
-router.get('/:id/integrantes', authenticateToken, async (req, res) => {
+router.get('/:id/integrantes', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -895,7 +876,7 @@ router.get('/:id/integrantes', authenticateToken, async (req, res) => {
 });
 
 // Agregar integrante a familia
-router.post('/:id/integrantes', authenticateToken, async (req, res) => {
+router.post('/:id/integrantes', authenticateToken, authorizePermission('familias.crear'), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre, fecha_nacimiento, relacion, sexo, observaciones } = req.body;

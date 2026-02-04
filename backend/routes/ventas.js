@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
+const authorizePermission = require('../middlewares/authorizePermission');
 
 // Validar suma de pagos
 function validarSumaPagos(pagos, montoTotal) {
@@ -94,7 +95,7 @@ async function ensureGenericBenefactor(conn) {
 }
 
 // GET /api/ventas/box/:codigo
-router.get('/box/:codigo', authenticateToken, async (req, res) => {
+router.get('/box/:codigo', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const codigo = decodeURIComponent(req.params.codigo || '').trim();
     if (!codigo) return res.status(400).json({ success: false, error: 'Código requerido' });
@@ -115,7 +116,7 @@ router.get('/box/:codigo', authenticateToken, async (req, res) => {
 
 
 // POST /api/ventas → registra venta y actualiza cajas + excedentes globales
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), async (req, res) => {
   const conn = await pool.getConnection();
 
   try {
@@ -525,7 +526,7 @@ function buildVentasWhere({ search, forma_pago, modalidad_id, estado, fecha_desd
 }
 
 // GET /api/ventas → listado paginado
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const q = parseVentasQuery(req.query);
     const { whereSql, params } = buildVentasWhere(q);
@@ -583,7 +584,7 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-router.get("/excedentes/saldo", authenticateToken, async (req, res) => {
+router.get("/excedentes/saldo", authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT SUM(excedente) AS saldo FROM excedentes
@@ -596,7 +597,7 @@ router.get("/excedentes/saldo", authenticateToken, async (req, res) => {
 
 
 // GET /api/ventas/export → mismo filtro, sin paginar
-router.get('/export', authenticateToken, async (req, res) => {
+router.get('/export', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const q = parseVentasQuery({ ...req.query, page: 1, limit: 100000 });
     const { whereSql, params } = buildVentasWhere(q);
@@ -645,7 +646,7 @@ router.get('/export', authenticateToken, async (req, res) => {
 
 
 // PUT /api/ventas/:id  → actualizar campos básicos y (opcional) estado de cajas
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const ventaId = Number(req.params.id);
