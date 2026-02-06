@@ -2,6 +2,9 @@
 /**
  * Rutas para gestión de permisos
  * Incluye endpoints para obtener, crear, actualizar y eliminar permisos
+ * 
+ * FIX: Columna 'modulo' no existe en tabla permisos → usar modulo_id con JOIN
+ * FIX: authorizePermission recibe UN solo argumento → formato 'modulo.accion'
  */
 
 const express = require('express');
@@ -13,12 +16,26 @@ const authorizePermission = require('../middlewares/authorizePermission');
 /**
  * GET /api/permisos
  * Obtener todos los permisos disponibles
+ * FIX: Ahora hace JOIN con modulos para obtener el nombre del módulo
  */
-router.get('/', authenticateToken, authorizePermission('usuarios', 'leer'), async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('usuarios.leer'), async (req, res) => {
   try {
-    const [permisos] = await pool.execute(
-      'SELECT id, modulo, nombre, descripcion, activo, created_at FROM permisos ORDER BY modulo, nombre'
-    );
+    const [permisos] = await pool.execute(`
+      SELECT 
+        p.id, 
+        p.modulo_id,
+        m.slug AS modulo,
+        m.nombre AS modulo_nombre,
+        p.accion,
+        p.nombre, 
+        p.slug,
+        p.descripcion, 
+        p.activo, 
+        p.created_at 
+      FROM permisos p
+      JOIN modulos m ON p.modulo_id = m.id
+      ORDER BY m.orden, m.nombre, p.accion
+    `);
 
     res.json({
       success: true,
@@ -37,14 +54,25 @@ router.get('/', authenticateToken, authorizePermission('usuarios', 'leer'), asyn
  * GET /api/permisos/:id
  * Obtener un permiso específico
  */
-router.get('/:id', authenticateToken, authorizePermission('usuarios', 'leer'), async (req, res) => {
+router.get('/:id', authenticateToken, authorizePermission('usuarios.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [permisos] = await pool.execute(
-      'SELECT id, modulo, nombre, descripcion, activo FROM permisos WHERE id = ?',
-      [id]
-    );
+    const [permisos] = await pool.execute(`
+      SELECT 
+        p.id, 
+        p.modulo_id,
+        m.slug AS modulo,
+        m.nombre AS modulo_nombre,
+        p.accion,
+        p.nombre, 
+        p.slug,
+        p.descripcion, 
+        p.activo
+      FROM permisos p
+      JOIN modulos m ON p.modulo_id = m.id
+      WHERE p.id = ?
+    `, [id]);
 
     if (permisos.length === 0) {
       return res.status(404).json({
@@ -70,43 +98,45 @@ router.get('/:id', authenticateToken, authorizePermission('usuarios', 'leer'), a
  * POST /api/permisos
  * Crear un nuevo permiso (solo admin)
  */
-router.post('/', authenticateToken, authorizePermission('usuarios'), async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('usuarios.crear'), async (req, res) => {
   try {
-    const { modulo, nombre, descripcion, activo } = req.body;
+    const { modulo_id, accion, nombre, slug, descripcion, activo } = req.body;
 
     // Validaciones
-    if (!modulo || !nombre) {
+    if (!modulo_id || !accion || !nombre || !slug) {
       return res.status(400).json({
         success: false,
-        error: 'El módulo y nombre son requeridos'
+        error: 'modulo_id, accion, nombre y slug son requeridos'
       });
     }
 
-    // Verificar si el módulo ya existe
+    // Verificar si el slug ya existe
     const [existing] = await pool.execute(
-      'SELECT id FROM permisos WHERE modulo = ?',
-      [modulo]
+      'SELECT id FROM permisos WHERE slug = ?',
+      [slug]
     );
 
     if (existing.length > 0) {
       return res.status(400).json({
         success: false,
-        error: 'El módulo ya existe'
+        error: 'Ya existe un permiso con ese slug'
       });
     }
 
     // Insertar permiso
     const [result] = await pool.execute(
-      'INSERT INTO permisos (modulo, nombre, descripcion, activo) VALUES (?, ?, ?, ?)',
-      [modulo, nombre, descripcion || null, activo !== false]
+      'INSERT INTO permisos (modulo_id, accion, nombre, slug, descripcion, activo) VALUES (?, ?, ?, ?, ?, ?)',
+      [modulo_id, accion, nombre, slug, descripcion || null, activo !== false]
     );
 
     res.status(201).json({
       success: true,
       data: {
         id: result.insertId,
-        modulo,
+        modulo_id,
+        accion,
         nombre,
+        slug,
         descripcion: descripcion || null,
         activo: activo !== false
       },
@@ -125,10 +155,10 @@ router.post('/', authenticateToken, authorizePermission('usuarios'), async (req,
  * PUT /api/permisos/:id
  * Actualizar un permiso (solo admin)
  */
-router.put('/:id', authenticateToken, authorizePermission('usuarios'), async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('usuarios.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { modulo, nombre, descripcion, activo } = req.body;
+    const { nombre, descripcion, activo } = req.body;
 
     // Verificar si existe
     const [existing] = await pool.execute(
@@ -147,10 +177,6 @@ router.put('/:id', authenticateToken, authorizePermission('usuarios'), async (re
     let updateFields = [];
     let updateValues = [];
 
-    if (modulo) {
-      updateFields.push('modulo = ?');
-      updateValues.push(modulo);
-    }
     if (nombre) {
       updateFields.push('nombre = ?');
       updateValues.push(nombre);
@@ -189,7 +215,7 @@ router.put('/:id', authenticateToken, authorizePermission('usuarios'), async (re
  * DELETE /api/permisos/:id
  * Eliminar un permiso (solo admin)
  */
-router.delete('/:id', authenticateToken, authorizePermission('usuarios'), async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('usuarios.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -206,7 +232,13 @@ router.delete('/:id', authenticateToken, authorizePermission('usuarios'), async 
       });
     }
 
-    // Eliminar asignaciones del permiso
+    // Eliminar asignaciones del permiso en rol_permisos
+    await pool.execute(
+      'DELETE FROM rol_permisos WHERE permiso_id = ?',
+      [id]
+    );
+
+    // Eliminar asignaciones del permiso en usuario_permisos
     await pool.execute(
       'DELETE FROM usuario_permisos WHERE permiso_id = ?',
       [id]

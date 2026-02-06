@@ -1,7 +1,10 @@
 // frontend/src/pages/Usuarios.jsx
 /**
- * Gestión de usuarios basada SOLO en roles.
- * Los permisos finos los manejaremos luego en Configuración.
+ * Gestión de usuarios basada en roles del sistema RBAC.
+ * 
+ * FIX: Ahora carga roles desde la BD (GET /api/roles) en vez de tener slugs hardcoded.
+ * FIX: Envía rol_id al crear/editar usuarios para que se asigne correctamente.
+ * FIX: Al editar, usa rol_id del usuario en vez del slug legacy.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -9,16 +12,9 @@ import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
-// Mapeo de valores de BD -> etiquetas amigables
-const ROLE_LABELS = {
-  admin: 'Administrador',
-  supervisor: 'Supervisor',
-  operador: 'Operador campañas (Cajas)',
-  consulta: 'Operador servicios (Sacramentos)',
-};
-
 export default function Usuarios() {
   const [usuarios, setUsuarios] = useState([]);
+  const [roles, setRoles] = useState([]); // ← NUEVO: roles desde BD
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -30,7 +26,7 @@ export default function Usuarios() {
     nombre: '',
     email: '',
     password: '',
-    rol: 'operador',   // por defecto: operador campañas
+    rol_id: '',    // ← FIX: usar rol_id en vez de slug
     activo: true,
   });
 
@@ -44,8 +40,23 @@ export default function Usuarios() {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
 
-      const res = await axios.get(`${API_URL}/usuarios`, { headers });
-      setUsuarios(res.data.data || []);
+      // Cargar usuarios y roles en paralelo
+      const [usersRes, rolesRes] = await Promise.all([
+        axios.get(`${API_URL}/usuarios`, { headers }),
+        axios.get(`${API_URL}/roles`, { headers }).catch(() => ({ data: { data: [] } }))
+      ]);
+
+      setUsuarios(usersRes.data.data || []);
+      
+      const rolesData = rolesRes.data.data || [];
+      setRoles(rolesData);
+
+      // Si no hay rol_id en el form, asignar el primer rol no-admin como default
+      if (!formData.rol_id && rolesData.length > 0) {
+        const defaultRol = rolesData.find(r => !r.es_admin) || rolesData[0];
+        setFormData(prev => ({ ...prev, rol_id: defaultRol.id }));
+      }
+
       setError(null);
     } catch (err) {
       setError('Error al cargar datos: ' + (err.response?.data?.error || err.message));
@@ -55,12 +66,19 @@ export default function Usuarios() {
     }
   };
 
+  // Helper: obtener nombre del rol por id
+  const getRolNombre = (usuario) => {
+    if (usuario.rol_nombre) return usuario.rol_nombre;
+    const rol = roles.find(r => r.id === usuario.rol_id);
+    return rol ? rol.nombre : (usuario.rol || 'Sin rol');
+  };
+
   const handleEdit = (usuario) => {
     setFormData({
       nombre: usuario.nombre,
       email: usuario.email,
       password: '',
-      rol: usuario.rol || 'operador',
+      rol_id: usuario.rol_id || '',  // ← FIX: usar rol_id
       activo: !!usuario.activo,
     });
     setEditingId(usuario.id);
@@ -83,6 +101,10 @@ export default function Usuarios() {
         setError('El email es obligatorio');
         return;
       }
+      if (!formData.rol_id) {
+        setError('Debe seleccionar un rol');
+        return;
+      }
       if (!editingId && (!formData.password || formData.password.length < 6)) {
         setError('La contraseña debe tener al menos 6 caracteres');
         return;
@@ -92,10 +114,11 @@ export default function Usuarios() {
         return;
       }
 
+      // ← FIX: Enviar rol_id (entero) para que el backend asigne correctamente
       const payload = {
         nombre: formData.nombre.trim(),
         email: formData.email.toLowerCase(),
-        rol: formData.rol,          // 👈 YA NO se fuerza, se usa lo elegido
+        rol_id: parseInt(formData.rol_id),
         activo: formData.activo,
       };
 
@@ -111,11 +134,13 @@ export default function Usuarios() {
         setSuccess('Usuario creado exitosamente');
       }
 
+      // Reset form
+      const defaultRol = roles.find(r => !r.es_admin) || roles[0];
       setFormData({
         nombre: '',
         email: '',
         password: '',
-        rol: 'operador',
+        rol_id: defaultRol?.id || '',
         activo: true,
       });
       setEditingId(null);
@@ -131,22 +156,20 @@ export default function Usuarios() {
     try {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
-
       await axios.patch(`${API_URL}/usuarios/${usuario.id}/toggle-status`, {}, { headers });
       setSuccess(`Usuario ${usuario.activo ? 'desactivado' : 'activado'} exitosamente`);
       await fetchData();
     } catch (err) {
-      setError('Error al cambiar estado del usuario');
+      setError('Error al cambiar estado');
       console.error('Error:', err);
     }
   };
 
   const handleDelete = async (usuario) => {
-    if (window.confirm(`¿Estás seguro de que deseas eliminar a ${usuario.nombre}?`)) {
+    if (window.confirm(`¿Estás seguro de eliminar a ${usuario.nombre}? Esta acción no se puede deshacer.`)) {
       try {
         const token = localStorage.getItem('token');
         const headers = { Authorization: `Bearer ${token}` };
-
         await axios.delete(`${API_URL}/usuarios/${usuario.id}`, { headers });
         setSuccess('Usuario eliminado exitosamente');
         await fetchData();
@@ -182,7 +205,7 @@ export default function Usuarios() {
             Gestión de Usuarios
           </h1>
           <p className="text-gray-600 dark:text-gray-400">
-            Administra usuarios por roles: campañas y servicios
+            Administra usuarios y asigna roles del sistema
           </p>
         </div>
 
@@ -202,13 +225,14 @@ export default function Usuarios() {
         <div className="mb-6 flex flex-col md:flex-row gap-4">
           <button
             onClick={() => {
+              const defaultRol = roles.find(r => !r.es_admin) || roles[0];
               setShowForm(true);
               setEditingId(null);
               setFormData({
                 nombre: '',
                 email: '',
                 password: '',
-                rol: 'operador',
+                rol_id: defaultRol?.id || '',
                 activo: true,
               });
               setError(null);
@@ -280,15 +304,20 @@ export default function Usuarios() {
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Rol
                   </label>
+                  {/* ← FIX: Select usa rol_id (entero) y carga roles dinámicamente desde BD */}
                   <select
-                    value={formData.rol}
-                    onChange={(e) => setFormData({ ...formData, rol: e.target.value })}
+                    value={formData.rol_id}
+                    onChange={(e) => setFormData({ ...formData, rol_id: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
                   >
-                    <option value="admin">{ROLE_LABELS.admin}</option>
-                    <option value="supervisor">{ROLE_LABELS.supervisor}</option>
-                    <option value="operador">{ROLE_LABELS.operador}</option>
-                    <option value="consulta">{ROLE_LABELS.consulta}</option>
+                    <option value="">-- Seleccionar rol --</option>
+                    {roles.map((rol) => (
+                      <option key={rol.id} value={rol.id}>
+                        {rol.nombre}
+                        {rol.es_admin ? ' (Admin)' : ''}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -336,7 +365,6 @@ export default function Usuarios() {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Nombre</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Email</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Rol</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Permisos</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Estado</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Acciones</th>
                 </tr>
@@ -344,7 +372,7 @@ export default function Usuarios() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredUsuarios.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan="5" className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
                       No hay usuarios registrados
                     </td>
                   </tr>
@@ -359,11 +387,8 @@ export default function Usuarios() {
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <span className="px-2 py-1 bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 rounded text-xs font-medium">
-                          {ROLE_LABELS[usuario.rol] || usuario.rol || 'Sin rol'}
+                          {getRolNombre(usuario)}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">
-                        {usuario.total_permisos || 0} permisos
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <span

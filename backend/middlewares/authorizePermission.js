@@ -2,24 +2,31 @@
 /**
  * Middleware de autorización por permisos dinámicos (RBAC)
  * 
+ * FIX: Ahora consulta TANTO rol_permisos COMO usuario_permisos (overrides individuales)
+ * FIX: Documentación actualizada para reflejar formato correcto de uso
+ * 
  * Uso en rutas:
- * - Verificar acceso a un módulo completo:
- *   app.get('/api/zonas', authenticateToken, authorizePermission('zonas'), ...)
+ * - Verificar acceso a un módulo completo (cualquier permiso del módulo):
+ *   router.get('/api/zonas', authenticateToken, authorizePermission('zonas'), ...)
  * 
  * - Verificar permiso específico (acción):
- *   app.post('/api/zonas', authenticateToken, authorizePermission('zonas.crear'), ...)
- *   app.put('/api/zonas/:id', authenticateToken, authorizePermission('zonas.actualizar'), ...)
- *   app.delete('/api/zonas/:id', authenticateToken, authorizePermission('zonas.eliminar'), ...)
+ *   router.post('/api/zonas', authenticateToken, authorizePermission('zonas.crear'), ...)
+ *   router.put('/api/zonas/:id', authenticateToken, authorizePermission('zonas.actualizar'), ...)
+ *   router.delete('/api/zonas/:id', authenticateToken, authorizePermission('zonas.eliminar'), ...)
  * 
  * - Verificar múltiples permisos (cualquiera de ellos):
- *   app.get('/api/datos', authorizePermission(['reportes.leer', 'dashboard.leer']), ...)
+ *   router.get('/api/datos', authorizePermission(['reportes.leer', 'dashboard.leer']), ...)
+ * 
+ * IMPORTANTE: La función acepta UN solo argumento (string o array).
+ *   ❌ INCORRECTO: authorizePermission('zonas', 'crear')  ← segundo arg se ignora
+ *   ✅ CORRECTO:   authorizePermission('zonas.crear')
  */
 
 const pool = require('../config/db');
 
 /**
  * Caché de permisos por usuario (evita consultas repetidas)
- * Estructura: { usuario_id: { permisos: Set(['zonas.crear', 'zonas.leer', ...]), timestamp } }
+ * Estructura: { usuario_id: { permisos: Set(['zonas_crear', 'zonas_leer', ...]), timestamp } }
  */
 const permissionsCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
@@ -41,6 +48,7 @@ function clearAllPermissionsCache() {
 
 /**
  * Obtener permisos de un usuario desde BD (con caché)
+ * Combina permisos del ROL + permisos individuales del USUARIO
  * @param {number} userId 
  * @returns {Promise<Set<string>>} Set de slugs de permisos
  */
@@ -52,18 +60,28 @@ async function getUserPermissions(userId) {
   }
 
   try {
-    // Consultar permisos del usuario
+    // FIX: Consultar permisos del ROL + permisos individuales del USUARIO
+    // Usa UNION para combinar ambas fuentes de permisos
     const [rows] = await pool.execute(`
       SELECT DISTINCT p.slug
       FROM usuarios u
       JOIN roles r ON u.rol_id = r.id
-      LEFT JOIN rol_permisos rp ON r.id = rp.rol_id
-      LEFT JOIN permisos p ON rp.permiso_id = p.id
+      JOIN rol_permisos rp ON r.id = rp.rol_id
+      JOIN permisos p ON rp.permiso_id = p.id
       WHERE u.id = ? 
         AND u.activo = TRUE 
         AND r.activo = TRUE
-        AND (p.activo IS NULL OR p.activo = TRUE)
-    `, [userId]);
+        AND p.activo = TRUE
+      
+      UNION
+      
+      SELECT DISTINCT p.slug
+      FROM usuario_permisos up
+      JOIN permisos p ON up.permiso_id = p.id
+      WHERE up.usuario_id = ?
+        AND up.activo = TRUE
+        AND p.activo = TRUE
+    `, [userId, userId]);
 
     const permisos = new Set(rows.map(row => row.slug).filter(Boolean));
 
@@ -104,6 +122,7 @@ async function isAdmin(userId) {
 /**
  * Middleware que verifica si el usuario tiene un permiso específico
  * @param {string|string[]} requiredPermissions - Permiso(s) requerido(s)
+ *   Formato: 'modulo.accion', 'modulo' (cualquier acción), o ['perm1', 'perm2']
  * @returns {function} Middleware function
  */
 function authorizePermission(requiredPermissions) {
@@ -129,23 +148,22 @@ function authorizePermission(requiredPermissions) {
         ? requiredPermissions 
         : [requiredPermissions];
 
-      // Obtener permisos del usuario
-      const userPermissions = await getUserPermissions(userId);
-
       // Si no se requieren permisos específicos, permitir acceso
       if (permissions.length === 0 || permissions[0] === '*') {
         return next();
       }
 
+      // Obtener permisos del usuario
+      const userPermissions = await getUserPermissions(userId);
+
       // Verificar si el usuario tiene al menos uno de los permisos requeridos
       const hasPermission = permissions.some(perm => {
         // Si el permiso es solo el módulo (ej: 'zonas'), verificar si tiene algún permiso de ese módulo
         if (!perm.includes('.') && !perm.includes('_')) {
-          // Verificar si tiene algún permiso que empiece con el módulo (formato: modulo_accion)
           return Array.from(userPermissions).some(up => up.startsWith(`${perm}_`));
         }
 
-        // Convertir formato 'modulo.accion' a 'modulo_accion' para compatibilidad
+        // Convertir formato 'modulo.accion' a 'modulo_accion' para compatibilidad con BD
         const permSlug = perm.replace('.', '_');
 
         // Verificar permiso exacto (buscar tanto con punto como con guión bajo)
@@ -153,12 +171,10 @@ function authorizePermission(requiredPermissions) {
       });
 
       if (!hasPermission) {
-        console.warn(`Usuario ${userId} sin permiso:`, permissions, 'Tiene:', Array.from(userPermissions));
+        console.warn(`⛔ Usuario ${userId} sin permiso:`, permissions, '| Tiene:', Array.from(userPermissions));
         return res.status(403).json({
           success: false,
-          message: 'No tienes permiso para acceder a este recurso',
-          required: permissions,
-          granted: Array.from(userPermissions)
+          message: 'No tienes permiso para acceder a este recurso'
         });
       }
 
@@ -197,11 +213,9 @@ async function hasPermission(userId, permissions) {
     const userPerms = await getUserPermissions(userId);
 
     return perms.some(perm => {
-      // Si es solo el módulo (sin separador)
       if (!perm.includes('.') && !perm.includes('_')) {
         return Array.from(userPerms).some(up => up.startsWith(`${perm}_`));
       }
-      // Convertir formato 'modulo.accion' a 'modulo_accion'
       const permSlug = perm.replace('.', '_');
       return userPerms.has(permSlug) || userPerms.has(perm);
     });
