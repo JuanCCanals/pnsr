@@ -10,18 +10,9 @@ import Calendar from './assets/Calendar.png';
 import Setting from './assets/Setting.png';
 import Control from './assets/control.png';
 
-// ✅ ACTUALIZADO: Mapea por slug del rol
-const ROLE_LABELS = {
-  admin: 'Administrador',
-  supervisor: 'Supervisor',
-  operador_cajas: 'Operador Campañas (Cajas)',
-  operador_servicios: 'Operador Servicios (Sacramentos)',
-  consulta: 'Consulta/Reportes',
-  // Compatibilidad con roles antiguos
-  operador: 'Operador Campañas (Cajas)',
-};
-
 // Menú items con permisos asociados
+// IMPORTANTE: permSlug debe coincidir con el prefijo de los slugs en tabla permisos
+// Ejemplo: permSlug 'zonas' matchea 'zonas_crear', 'zonas_leer', etc.
 const Menus = [
   { title: 'Dashboard', src: Chart, path: '/dashboard' },
 
@@ -31,7 +22,7 @@ const Menus = [
   { title: 'Campañas', src: Folder, path: '/campanias', permSlug: 'campanias' },
   { title: 'Modalidades', src: Folder, path: '/modalidades', permSlug: 'modalidades' },
   { title: 'Puntos Venta', src: Folder, path: '/puntosventa', permSlug: 'puntos_venta' },
-  { title: 'Gestión', src: Folder, path: '/gestion', permSlug: 'gestion_ventas' },
+  { title: 'Gestión', src: Folder, path: '/gestion', permSlug: 'venta_cajas' },        // FIX: era 'gestion_ventas'
   { title: 'Donaciones', src: Folder, path: '/donaciones', permSlug: 'donaciones' },
 
   // Servicios parroquiales
@@ -81,46 +72,32 @@ export default function Sidebar() {
     localStorage.setItem('theme', next ? 'dark' : 'light');
   };
 
-  // ✅ NUEVO: Obtener rol slug correctamente (maneja objeto y string)
-  const getRolSlug = () => {
+  // Obtener nombre del rol para mostrar
+  const getRolNombre = () => {
     if (!user) return '';
-    // Si user.rol es un objeto (nuevo sistema)
     if (typeof user.rol === 'object' && user.rol !== null) {
-      return user.rol.slug || '';
+      return user.rol.nombre || user.rol.slug || '';
     }
-    // Si user.rol es un string (sistema antiguo o compatibilidad)
     return user.rol || '';
   };
 
-  // ✅ NUEVO: Obtener nombre del rol para mostrar
-  const getRolNombre = () => {
-    if (!user) return '';
-    // Si user.rol es un objeto (nuevo sistema)
-    if (typeof user.rol === 'object' && user.rol !== null) {
-      return user.rol.nombre || ROLE_LABELS[user.rol.slug] || user.rol.slug;
-    }
-    // Si user.rol es un string (sistema antiguo)
-    return ROLE_LABELS[user.rol] || user.rol;
-  };
-
-  // ✅ NUEVO: Verificar si el usuario tiene permiso para un módulo
+  // ✅ FIX: Verificar si el usuario tiene permiso para un módulo
   const hasPermission = (permSlug) => {
-    if (!permSlug) return true; // Si no requiere permiso específico, permitir
+    if (!permSlug) return true; // Dashboard u otros sin permiso requerido
     if (!user) return false;
 
     // Si es admin, tiene acceso a todo
-    if (user.rol?.es_admin || (typeof user.rol === 'object' && user.rol?.es_admin)) {
-      return true;
-    }
+    if (typeof user.rol === 'object' && user.rol?.es_admin) return true;
+    if (user.rol === 'admin') return true;
 
-    // Si tiene permisos de todo (wildcard)
-    if (user.permisos?.includes('*')) {
-      return true;
-    }
+    // Wildcard
+    if (user.permisos?.includes('*')) return true;
 
-    // Verificar si tiene algún permiso que empiece con el slug del módulo
-    // Por ejemplo: si permSlug es 'zonas', busca 'zonas.crear', 'zonas.leer', etc.
-    return user.permisos?.some(p => p.startsWith(`${permSlug}.`)) || false;
+    // ✅ FIX CRÍTICO: Buscar con GUIÓN BAJO (formato de la BD: zonas_leer, familias_crear)
+    // También buscar con PUNTO por compatibilidad
+    return user.permisos?.some(p => 
+      p.startsWith(`${permSlug}_`) || p.startsWith(`${permSlug}.`)
+    ) || false;
   };
 
   const handleMenuClick = (menu) => {

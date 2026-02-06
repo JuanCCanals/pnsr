@@ -58,10 +58,13 @@ function App() {
               {/* Home → Dashboard */}
               <Route index element={<Navigate to="/dashboard" replace />} />
 
-              {/* Dashboard: lo dejamos libre para todos los usuarios autenticados */}
+              {/* Dashboard: libre para todos los usuarios autenticados */}
               <Route path="dashboard" element={<Dashboard />} />
 
-              {/* ===== Módulos con gating por PERMISO (slug en permisos.modulo) ===== */}
+              {/* ===== TODOS los módulos protegidos por PERMISO (requiredPerm) ===== */}
+              {/* El permSlug debe coincidir con el prefijo en tabla permisos */}
+              {/* Ej: requiredPerm="zonas" matchea zonas_leer, zonas_crear, etc. */}
+
               <Route
                 path="zonas"
                 element={
@@ -79,6 +82,30 @@ function App() {
                 }
               />
               <Route
+                path="campanias"
+                element={
+                  <ProtectedRoute requiredPerm="campanias">
+                    <Campanias />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="modalidades"
+                element={
+                  <ProtectedRoute requiredPerm="modalidades">
+                    <Modalidades />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="puntosventa"
+                element={
+                  <ProtectedRoute requiredPerm="puntos_venta">
+                    <PuntosVenta />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="gestion"
                 element={
                   <ProtectedRoute requiredPerm="venta_cajas">
@@ -86,32 +113,38 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-
               <Route
-                path="registrar-servicios"
+                path="donaciones"
                 element={
-                  <ProtectedRoute
-                    requiredRole={['admin', 'consulta']}
-                    requiredPerm={['registrar-servicios']}
-                  >
-                    <Cobros />
+                  <ProtectedRoute requiredPerm="donaciones">
+                    <Donaciones />
                   </ProtectedRoute>
                 }
               />
-
-              {/* Servicios y Comprobantes por ahora solo por rol para no romper si no existe el permiso */}
               <Route
                 path="servicios"
                 element={
-                  <ProtectedRoute
-                    requiredRole={['admin', 'consulta']}
-                    requiredPerm="servicios"
-                  >
+                  <ProtectedRoute requiredPerm="servicios">
                     <Servicios />
                   </ProtectedRoute>
                 }
               />
-
+              <Route
+                path="registrar-servicios"
+                element={
+                  <ProtectedRoute requiredPerm="registrar_servicios">
+                    <Cobros />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="comprobantes"
+                element={
+                  <ProtectedRoute requiredPerm="comprobantes">
+                    <Comprobantes />
+                  </ProtectedRoute>
+                }
+              />
               <Route
                 path="reportes"
                 element={
@@ -123,45 +156,18 @@ function App() {
               <Route
                 path="integracion"
                 element={
-                  <ProtectedRoute requiredPerm={['servicios', 'venta_cajas']}>
+                  <ProtectedRoute requiredPerm="integracion">
                     <Integracion />
                   </ProtectedRoute>
                 }
               />
 
-              {/* ===== Rutas sin permiso específico (como las tenías) ===== */}
-              <Route path="campanias" element={<Campanias />} />
-              <Route path="modalidades" element={<Modalidades />} />
-              <Route path="puntosventa" element={<PuntosVenta />} />
-              <Route
-                path="donaciones"
-                element={
-                  <ProtectedRoute requiredRole={['admin', 'supervisor' , 'operador']}>
-                    <Donaciones />
-                  </ProtectedRoute>
-                }
-              />
-              {/* Servicios y Comprobantes por ahora solo por rol para no romper si no existe el permiso */}
-              <Route
-                path="servicios"
-                element={
-                  <ProtectedRoute
-                    requiredRole={['admin', 'consulta']}
-                    requiredPerm="servicios"
-                  >
-                    <Servicios />
-                  </ProtectedRoute>
-                }
-              />
-
-
-              <Route path="comprobantes" element={<Comprobantes />} />
-
-              {/* Usuarios / Configuración: solo admin por rol */}
+              {/* FIX: Usuarios y Configuración ahora usan requiredPerm en vez de requiredRole="admin" */}
+              {/* Así un Supervisor con permiso 'usuarios_leer' puede ver la lista */}
               <Route
                 path="usuarios"
                 element={
-                  <ProtectedRoute requiredRole="admin">
+                  <ProtectedRoute requiredPerm="usuarios">
                     <Usuarios />
                   </ProtectedRoute>
                 }
@@ -169,7 +175,7 @@ function App() {
               <Route
                 path="configuracion"
                 element={
-                  <ProtectedRoute requiredRole="admin">
+                  <ProtectedRoute requiredPerm="configuracion">
                     <Configuracion />
                   </ProtectedRoute>
                 }
