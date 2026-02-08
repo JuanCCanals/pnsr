@@ -1,11 +1,10 @@
 // backend/routes/excedentes.js
 /**
  * Rutas para gestión de Excedentes (Donaciones adicionales)
- * Tabla: excedentes
- *  - id (INT, PK, AI)
- *  - venta_id (INT, NULL, referencia opcional a código de caja / venta)
- *  - excedente (DECIMAL(10,2), NOT NULL)
- *  - fecha (TIMESTAMP, DEFAULT CURRENT_TIMESTAMP)
+ * 
+ * FIX: authorizePermission('ingresos') → authorizePermission('donaciones.accion')
+ *      El módulo 'ingresos' NO EXISTE en la BD. El módulo correcto es 'donaciones'
+ *      con permisos: donaciones_crear, donaciones_leer, donaciones_actualizar, donaciones_eliminar
  */
 
 const express = require('express');
@@ -17,14 +16,11 @@ const authorizePermission = require('../middlewares/authorizePermission');
 /**
  * GET /api/excedentes
  * Listar excedentes (con filtros opcionales por fecha)
- * Query params opcionales:
- *  - desde (YYYY-MM-DD)
- *  - hasta (YYYY-MM-DD)
  */
 router.get(
   '/',
   authenticateToken,
-  authorizePermission('ingresos'),
+  authorizePermission('donaciones.leer'),
   async (req, res) => {
     try {
       const { desde, hasta } = req.query;
@@ -77,7 +73,7 @@ router.get(
 router.get(
   '/:id',
   authenticateToken,
-  authorizePermission('ingresos'),
+  authorizePermission('donaciones.leer'),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -119,21 +115,16 @@ router.get(
 /**
  * POST /api/excedentes
  * Crear un nuevo excedente
- * Body:
- *  - venta_id (number, opcional)  -> Código de Caja / referencia
- *  - excedente (number/string, requerido)
- *  - fecha (opcional, YYYY-MM-DD HH:MM:SS)
  */
 router.post(
   '/',
   authenticateToken,
-  authorizePermission('ingresos'),
+  authorizePermission('donaciones.crear'),
   async (req, res) => {
     try {
       const { venta_id, excedente, fecha } = req.body;
       const errores = [];
 
-      // venta_id es OPCIONAL
       if (excedente === undefined || excedente === null || excedente === '') {
         errores.push({
           field: 'excedente',
@@ -190,15 +181,11 @@ router.post(
 /**
  * PUT /api/excedentes/:id
  * Actualizar un excedente
- * Body:
- *  - venta_id (opcional)
- *  - excedente (opcional)
- *  - fecha (opcional)
  */
 router.put(
   '/:id',
   authenticateToken,
-  authorizePermission('ingresos'),
+  authorizePermission('donaciones.actualizar'),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -269,7 +256,7 @@ router.put(
 router.delete(
   '/:id',
   authenticateToken,
-  authorizePermission('ingresos'),
+  authorizePermission('donaciones.eliminar'),
   async (req, res) => {
     try {
       const { id } = req.params;

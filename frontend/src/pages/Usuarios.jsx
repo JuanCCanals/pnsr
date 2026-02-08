@@ -2,19 +2,22 @@
 /**
  * Gestión de usuarios basada en roles del sistema RBAC.
  * 
- * FIX: Ahora carga roles desde la BD (GET /api/roles) en vez de tener slugs hardcoded.
- * FIX: Envía rol_id al crear/editar usuarios para que se asigne correctamente.
- * FIX: Al editar, usa rol_id del usuario en vez del slug legacy.
+ * FIX: Usa hasPermission del AuthContext para ocultar botones según permisos granulares
+ * - usuarios_leer → puede ver la lista
+ * - usuarios_crear → puede crear nuevos usuarios (botón + Nuevo)
+ * - usuarios_actualizar → puede editar usuarios (botones Editar, Activar/Desactivar)
+ * - usuarios_eliminar → puede eliminar usuarios (botón Eliminar)
  */
 
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 export default function Usuarios() {
   const [usuarios, setUsuarios] = useState([]);
-  const [roles, setRoles] = useState([]); // ← NUEVO: roles desde BD
+  const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -22,11 +25,20 @@ export default function Usuarios() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
+  // ← FIX: Usar hasPermission del AuthContext para verificar permisos granulares
+  const { hasPermission } = useAuth();
+
+  // Permisos granulares del usuario actual
+  const canCreate = hasPermission('usuarios', 'crear');
+  const canUpdate = hasPermission('usuarios', 'actualizar');
+  const canDelete = hasPermission('usuarios', 'eliminar');
+  const canModify = canCreate || canUpdate; // Puede ver el formulario
+
   const [formData, setFormData] = useState({
     nombre: '',
     email: '',
     password: '',
-    rol_id: '',    // ← FIX: usar rol_id en vez de slug
+    rol_id: '',
     activo: true,
   });
 
@@ -40,7 +52,6 @@ export default function Usuarios() {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
 
-      // Cargar usuarios y roles en paralelo
       const [usersRes, rolesRes] = await Promise.all([
         axios.get(`${API_URL}/usuarios`, { headers }),
         axios.get(`${API_URL}/roles`, { headers }).catch(() => ({ data: { data: [] } }))
@@ -51,7 +62,6 @@ export default function Usuarios() {
       const rolesData = rolesRes.data.data || [];
       setRoles(rolesData);
 
-      // Si no hay rol_id en el form, asignar el primer rol no-admin como default
       if (!formData.rol_id && rolesData.length > 0) {
         const defaultRol = rolesData.find(r => !r.es_admin) || rolesData[0];
         setFormData(prev => ({ ...prev, rol_id: defaultRol.id }));
@@ -66,7 +76,6 @@ export default function Usuarios() {
     }
   };
 
-  // Helper: obtener nombre del rol por id
   const getRolNombre = (usuario) => {
     if (usuario.rol_nombre) return usuario.rol_nombre;
     const rol = roles.find(r => r.id === usuario.rol_id);
@@ -74,11 +83,12 @@ export default function Usuarios() {
   };
 
   const handleEdit = (usuario) => {
+    if (!canUpdate) return; // Doble protección
     setFormData({
       nombre: usuario.nombre,
       email: usuario.email,
       password: '',
-      rol_id: usuario.rol_id || '',  // ← FIX: usar rol_id
+      rol_id: usuario.rol_id || '',
       activo: !!usuario.activo,
     });
     setEditingId(usuario.id);
@@ -89,6 +99,17 @@ export default function Usuarios() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Verificar permiso antes de enviar
+    if (editingId && !canUpdate) {
+      setError('No tienes permiso para editar usuarios');
+      return;
+    }
+    if (!editingId && !canCreate) {
+      setError('No tienes permiso para crear usuarios');
+      return;
+    }
+
     try {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
@@ -114,7 +135,6 @@ export default function Usuarios() {
         return;
       }
 
-      // ← FIX: Enviar rol_id (entero) para que el backend asigne correctamente
       const payload = {
         nombre: formData.nombre.trim(),
         email: formData.email.toLowerCase(),
@@ -134,7 +154,6 @@ export default function Usuarios() {
         setSuccess('Usuario creado exitosamente');
       }
 
-      // Reset form
       const defaultRol = roles.find(r => !r.es_admin) || roles[0];
       setFormData({
         nombre: '',
@@ -153,6 +172,7 @@ export default function Usuarios() {
   };
 
   const handleToggleStatus = async (usuario) => {
+    if (!canUpdate) return; // Doble protección
     try {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
@@ -166,6 +186,7 @@ export default function Usuarios() {
   };
 
   const handleDelete = async (usuario) => {
+    if (!canDelete) return; // Doble protección
     if (window.confirm(`¿Estás seguro de eliminar a ${usuario.nombre}? Esta acción no se puede deshacer.`)) {
       try {
         const token = localStorage.getItem('token');
@@ -223,25 +244,28 @@ export default function Usuarios() {
 
         {/* Botón nuevo usuario + búsqueda */}
         <div className="mb-6 flex flex-col md:flex-row gap-4">
-          <button
-            onClick={() => {
-              const defaultRol = roles.find(r => !r.es_admin) || roles[0];
-              setShowForm(true);
-              setEditingId(null);
-              setFormData({
-                nombre: '',
-                email: '',
-                password: '',
-                rol_id: defaultRol?.id || '',
-                activo: true,
-              });
-              setError(null);
-              setSuccess(null);
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-          >
-            + Nuevo Usuario
-          </button>
+          {/* ← FIX: Solo mostrar botón "Nuevo" si tiene permiso de crear */}
+          {canCreate && (
+            <button
+              onClick={() => {
+                const defaultRol = roles.find(r => !r.es_admin) || roles[0];
+                setShowForm(true);
+                setEditingId(null);
+                setFormData({
+                  nombre: '',
+                  email: '',
+                  password: '',
+                  rol_id: defaultRol?.id || '',
+                  activo: true,
+                });
+                setError(null);
+                setSuccess(null);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+            >
+              + Nuevo Usuario
+            </button>
+          )}
           <input
             type="text"
             placeholder="Buscar por nombre o email..."
@@ -251,8 +275,8 @@ export default function Usuarios() {
           />
         </div>
 
-        {/* Formulario */}
-        {showForm && (
+        {/* Formulario - solo si tiene permiso de crear o actualizar */}
+        {showForm && canModify && (
           <div className="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
               {editingId ? 'Editar Usuario' : 'Nuevo Usuario'}
@@ -304,7 +328,6 @@ export default function Usuarios() {
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Rol
                   </label>
-                  {/* ← FIX: Select usa rol_id (entero) y carga roles dinámicamente desde BD */}
                   <select
                     value={formData.rol_id}
                     onChange={(e) => setFormData({ ...formData, rol_id: e.target.value })}
@@ -366,13 +389,16 @@ export default function Usuarios() {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Email</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Rol</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Estado</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Acciones</th>
+                  {/* ← FIX: Solo mostrar columna Acciones si tiene algún permiso de modificación */}
+                  {(canUpdate || canDelete) && (
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-gray-900 dark:text-white">Acciones</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {filteredUsuarios.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={canUpdate || canDelete ? 5 : 4} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
                       No hay usuarios registrados
                     </td>
                   </tr>
@@ -401,26 +427,35 @@ export default function Usuarios() {
                           {usuario.activo ? 'Activo' : 'Inactivo'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm space-x-2">
-                        <button
-                          onClick={() => handleEdit(usuario)}
-                          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => handleToggleStatus(usuario)}
-                          className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-300 font-medium"
-                        >
-                          {usuario.activo ? 'Desactivar' : 'Activar'}
-                        </button>
-                        <button
-                          onClick={() => handleDelete(usuario)}
-                          className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium"
-                        >
-                          Eliminar
-                        </button>
-                      </td>
+                      {/* ← FIX: Botones condicionados por permiso granular */}
+                      {(canUpdate || canDelete) && (
+                        <td className="px-4 py-3 text-sm space-x-2">
+                          {canUpdate && (
+                            <button
+                              onClick={() => handleEdit(usuario)}
+                              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
+                            >
+                              Editar
+                            </button>
+                          )}
+                          {canUpdate && (
+                            <button
+                              onClick={() => handleToggleStatus(usuario)}
+                              className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-300 font-medium"
+                            >
+                              {usuario.activo ? 'Desactivar' : 'Activar'}
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => handleDelete(usuario)}
+                              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium"
+                            >
+                              Eliminar
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}
