@@ -31,7 +31,7 @@ const PuntosVenta = () => {
     setLoading(true);
     try {
       const { data } = await api.get('/puntos-venta');
-      setPvs(data);
+      setPvs(Array.isArray(data) ? data : (data.data || []));
       setError(null);
     } catch (err) {
       console.error(err);
