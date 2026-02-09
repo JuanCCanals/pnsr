@@ -7,10 +7,16 @@
 
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 const Donaciones = () => {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('donaciones', 'crear');
+  const canUpdate = hasPermission('donaciones', 'actualizar');
+  const canDelete = hasPermission('donaciones', 'eliminar');
+
   const [excedentes, setExcedentes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -277,18 +283,18 @@ const Donaciones = () => {
           </form>
 
           <div>
-            <button
+            {canCreate && <button
               onClick={handleNuevo}
               className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duración-200"
             >
               + Registrar Excedente
-            </button>
+            </button>}
           </div>
         </div>
       </div>
 
       {/* Formulario */}
-      {showForm && (
+      {showForm && (canCreate || canUpdate) && (
         <div className="bg-white dark:bg-gray-700 shadow rounded-lg p-6">
           <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">
             {editingId ? 'Editar Excedente' : 'Nuevo Excedente'}
@@ -437,18 +443,18 @@ const Donaciones = () => {
                         : '-'}
                     </td>
                     <td className="px-4 py-2 space-x-2">
-                      <button
+                      {canUpdate && <button
                         onClick={() => handleEdit(item)}
                         className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
                       >
                         Editar
-                      </button>
-                      <button
+                      </button>}
+                      {canDelete && <button
                         onClick={() => handleDelete(item)}
                         className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium"
                       >
                         Eliminar
-                      </button>
+                      </button>}
                     </td>
                   </tr>
                 ))}

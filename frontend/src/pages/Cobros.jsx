@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { cobrosService, metodoPagoService } from '../services/api'; // ✅ CORREGIDO
 import { consultarDNI } from '../services/dniService'; // â† AGREGAR ESTA LÃNEA
-// import { useAuth } from '../contexts/AuthContext'; // Si no lo usas, déjalo comentado
+import { useAuth } from '../contexts/AuthContext';
 
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
 
@@ -195,6 +195,11 @@ async function abrirTicketCobroHtml(cobroId) {
 // ========== COMPONENTE ==========
 
 const Servicios = () => {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('registrar_servicios', 'crear');
+  const canUpdate = hasPermission('registrar_servicios', 'actualizar');
+  const canDelete = hasPermission('registrar_servicios', 'eliminar');
+
   // const { user } = useAuth(); // si no lo usas, puedes quitarlo
   const [servicios, setServicios] = useState([]);
   const [tiposServicio, setTiposServicio] = useState([]);
@@ -741,12 +746,12 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
           />
         </div>
         <div className="flex gap-2">
-          <button
+          {canCreate && <button
             onClick={() => { resetForm(); setShowModal(true); }}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             Nuevo
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -788,12 +793,12 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <div className="flex justify-end space-x-2">
-                    <button
+                    {canUpdate && <button
                       onClick={() => handleEdit(servicio)}
                       className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
                     >
                       Editar
-                    </button>
+                    </button>}
 
                     {/* Imprimir ticket: permitido SIEMPRE */}
                     <button
@@ -825,7 +830,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
                       Imprimir ticket
                     </button>
 
-                    {servicio.estado === 'programado' && (
+                    {servicio.estado === 'programado' && canUpdate && (
                       <>
                         <button
                           onClick={() => handleMarcarRealizado(servicio.id)}
@@ -853,7 +858,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
                       </button>
                     )}
 
-                    {servicio.estado !== 'realizado' && (
+                    {servicio.estado !== 'realizado' && canDelete && (
                       <button
                         onClick={() => handleDelete(servicio.id)}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"

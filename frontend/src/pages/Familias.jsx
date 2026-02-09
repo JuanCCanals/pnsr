@@ -448,7 +448,10 @@ const Modal = ({ title, onClose, children, footer }) => (
 );
 
 const Familias = () => {
-  const { user } = useAuth();
+  const { user, hasPermission: checkPerm } = useAuth();
+  const canCreate = checkPerm('familias', 'crear');
+  const canUpdate = checkPerm('familias', 'actualizar');
+  const canDelete = checkPerm('familias', 'eliminar');
 
   // list / filtros
   const [familias, setFamilias] = useState([]);
@@ -1058,22 +1061,22 @@ const Familias = () => {
 
           <div className="flex gap-2">
             {/* PRE IMPORTACIÓN */}
-            <button
+            {canCreate && <button
               type="button"
               onClick={() => setShowImportModal(true)}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               PRE IMPORTACIÓN
-            </button>
+            </button>}
 
             {/* Importar Excel (abre el mismo modal) */}
-            <button
+            {canCreate && <button
               type="button"
               onClick={() => setShowImportModal(true)}
               className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
               Importar Excel
-            </button>
+            </button>}
 
             {/* Imprimir etiquetas por zona */}
             <button

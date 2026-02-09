@@ -169,13 +169,11 @@ router.post('/', authenticateToken, authorizePermission('servicios', 'crear'), a
     const [r] = await pool.execute(
       `INSERT INTO servicios
         (tipo_servicio_id, cliente_id, fecha_servicio, hora_servicio,
-        precio, estado, observaciones,
-        forma_pago, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        precio, estado, observaciones)
+        VALUES (?,?,?,?,?,?,?)`,
       [
         tipo_servicio_id, cliente_id, fecha_servicio, hora_servicio,
-        precio, estado, observaciones,
-        forma_pago, fecha_operacion, hora_operacion, nro_operacion, obs_operacion
+        precio, estado, observaciones
       ]
     );
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 /**
  * Modalidades.jsx
@@ -8,6 +9,11 @@ import api from '../services/api';
  * - Estilo: TailwindCSS.
  */
 const Modalidades = () => {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('modalidades', 'crear');
+  const canUpdate = hasPermission('modalidades', 'actualizar');
+  const canDelete = hasPermission('modalidades', 'eliminar');
+
   // State
   const [campanias, setCampanias] = useState([]);
   const [selectedCampania, setSelectedCampania] = useState('');
@@ -119,12 +125,12 @@ const Modalidades = () => {
             <option key={c.id} value={c.id}>{c.anio} - {c.nombre}</option>
           ))}
         </select>
-        <button
+        {canCreate && <button
           onClick={openNewModal}
           className="ml-auto px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
         >
           Nueva Modalidad
-        </button>
+        </button>}
       </div>
 
       {loading && <p className="text-gray-600">Cargando...</p>}
@@ -150,12 +156,12 @@ const Modalidades = () => {
                 <td className="px-4 py-2 border">{m.moneda}</td>
                 <td className="px-4 py-2 border">{m.estado ? 'Activo' : 'Inactivo'}</td>
                 <td className="px-4 py-2 border">
-                  <button
+                  {canUpdate && <button
                     onClick={() => openEditModal(m)}
                     className="px-2 py-1 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600"
                   >
                     Editar
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}

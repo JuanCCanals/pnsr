@@ -1,5 +1,6 @@
 // /frontend/src/pages/Ventas.jsx
 import React, { useEffect, useState } from "react";
+import { useAuth } from "../contexts/AuthContext";
 import ExcelJS from "exceljs";
 import { ventasService, catalogosService } from "../services/api";
 
@@ -21,6 +22,10 @@ const toYMD = (v) => {
 };
 
 export default function Ventas() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('venta_cajas', 'crear');
+  const canUpdate = hasPermission('venta_cajas', 'actualizar');
+
   // ---------- listado / filtros ----------
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -562,13 +567,13 @@ export default function Ventas() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
+          {canCreate && <button
             type="button"
             onClick={openCreateModal}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
           >
             Asignar caja
-          </button>
+          </button>}
           <button
             type="button"
             onClick={handleExportXlsxAll}
@@ -710,12 +715,12 @@ export default function Ventas() {
                     </td>
 
                     <td className="px-5 py-3 whitespace-nowrap">
-                      <button
+                      {canUpdate && <button
                         className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
                         onClick={() => openEditModal(r)}
                       >
                         Modificar
-                      </button>
+                      </button>}
                     </td>
                   </tr>
                 ))}

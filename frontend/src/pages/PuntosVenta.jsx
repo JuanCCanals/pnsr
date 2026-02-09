@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 /**
  * PuntosVenta.jsx
@@ -9,6 +10,11 @@ import api from '../services/api';
  * Estilo: TailwindCSS
  */
 const PuntosVenta = () => {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('puntos_venta', 'crear');
+  const canUpdate = hasPermission('puntos_venta', 'actualizar');
+  const canDelete = hasPermission('puntos_venta', 'eliminar');
+
   // ─── State ─────────────────────────────────
   const [pvs, setPvs] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
@@ -124,12 +130,12 @@ const PuntosVenta = () => {
     <div className="p-6">
       <h2 className="text-2xl font-semibold mb-4">Puntos de Venta</h2>
 
-      <button
+      {canCreate && <button
         onClick={openNewModal}
         className="px-4 py-2 bg-green-600 text-white rounded mb-4 hover:bg-green-700"
       >
         Nuevo Punto de Venta
-      </button>
+      </button>}
 
       {loading && <p className="text-gray-600">Cargando...</p>}
       {error   && <p className="text-red-500 mb-2">{error}</p>}
@@ -155,20 +161,20 @@ const PuntosVenta = () => {
                 <td className="px-4 py-2 border">{pv.responsable || '-'}</td>
                 <td className="px-4 py-2 border">{pv.estado === 1 ? 'Activo' : 'Inactivo'}</td>
                 <td className="px-4 py-2 border space-x-2">
-                  <button
+                  {canUpdate && <button
                     onClick={() => openEditModal(pv)}
                     className="px-2 py-1 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600"
                   >
                     Editar
-                  </button>
-                  <button
+                  </button>}
+                  {canUpdate && <button
                     onClick={() => toggleEstado(pv)}
                     className={`px-2 py-1 text-xs rounded text-white ${
                       pv.estado === 1 ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}
                     `}
                   >
                     {pv.estado === 1 ? 'Desactivar' : 'Activar'}
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}

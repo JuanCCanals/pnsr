@@ -1,5 +1,6 @@
 // /src/pages/Servicios.jsx
 import React, { useEffect, useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 /* ============== Helpers HTTP (fetch + JWT) ============== */
 async function httpGet(url) {
@@ -32,6 +33,11 @@ async function eliminarTipo(id) {
 
 /* ========================= Componente ========================= */
 export default function Servicios() {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('servicios', 'crear');
+  const canUpdate = hasPermission('servicios', 'actualizar');
+  const canDelete = hasPermission('servicios', 'eliminar');
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -161,12 +167,12 @@ export default function Servicios() {
             />
           </div>
           <div className="flex gap-2">
-            <button
+            {canCreate && <button
               onClick={openNew}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"
             >
               Nuevo
-            </button>
+            </button>}
             <button
               onClick={load}
               className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg"
@@ -208,18 +214,18 @@ export default function Servicios() {
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                    <button
+                    {canUpdate && <button
                       onClick={() => openEdit(it)}
                       className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 mr-3"
                     >
                       Editar
-                    </button>
-                    <button
+                    </button>}
+                    {canDelete && <button
                       onClick={() => removeItem(it.id)}
                       className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
                     >
                       Eliminar
-                    </button>
+                    </button>}
                   </td>
                 </tr>
               ))}

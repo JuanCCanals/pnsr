@@ -1,11 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import api from '../services/api'; // tu instancia de Axios
+import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext'; // tu instancia de Axios
 
 /**
  * Campanias.jsx  (TailwindCSS)
  * CRUD de campañas anuales
  */
 const Campanias = () => {
+  const { hasPermission } = useAuth();
+  const canCreate = hasPermission('campanias', 'crear');
+  const canUpdate = hasPermission('campanias', 'actualizar');
+  const canDelete = hasPermission('campanias', 'eliminar');
+
   // ─── State ─────────────────────────────────────────
   const [campanias, setCampanias] = useState([]);
   const [loading, setLoading]       = useState(false);
@@ -114,12 +120,12 @@ const Campanias = () => {
     <div className="p-6">
       <h2 className="text-2xl font-semibold mb-4">Campañas</h2>
 
-      <button
+      {canCreate && <button
         onClick={openNewModal}
         className="px-4 py-2 bg-blue-600 text-white rounded mb-4 hover:bg-blue-700"
       >
         Nueva Campaña
-      </button>
+      </button>}
 
       {loading && <p className="text-gray-600">Cargando...</p>}
       {error   && <p className="text-red-500 mb-2">{error}</p>}
@@ -145,13 +151,13 @@ const Campanias = () => {
                 <td className="px-4 py-2 border">{c.fecha_inicio || '-'}</td>
                 <td className="px-4 py-2 border">{c.fecha_fin    || '-'}</td>
                 <td className="px-4 py-2 border space-x-2">
-                  <button
+                  {canUpdate && <button
                     onClick={() => openEditModal(c)}
                     className="px-2 py-1 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600"
                   >
                     Editar
-                  </button>
-                  <button
+                  </button>}
+                  {canUpdate && <button
                     onClick={() => toggleEstado(c)}
                     className={`px-2 py-1 text-xs rounded text-white ${
                       c.estado === 'ACTIVA'
@@ -160,7 +166,7 @@ const Campanias = () => {
                     }`}
                   >
                     {c.estado === 'ACTIVA' ? 'Desactivar' : 'Activar'}
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}
