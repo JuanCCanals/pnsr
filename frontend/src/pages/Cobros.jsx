@@ -1160,7 +1160,10 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
 
     {/* Campos de operación si ≠ efectivo */}
-    {formData.forma_pago && formData.forma_pago !== 'efectivo' && (
+    {pagos.some(p => {
+    const m = metodosPago.find(mp => String(mp.id) === String(p.metodo_pago_id));
+    return m && m.nombre.toLowerCase() !== 'efectivo';
+    }) && (
       <>
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha de operación</label>
