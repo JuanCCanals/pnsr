@@ -15,7 +15,8 @@ import Modalidades from './pages/Modalidades';
 import PuntosVenta from './pages/PuntosVenta';
 import Ventas from './pages/Ventas';
 import Benefactores from './pages/Benefactores';
-import Donaciones from './pages/Donaciones';
+import Excedentes from './pages/Excedentes';
+import DonacionesFisicas from './pages/DonacionesFisicas';
 import Servicios from './pages/Servicios';
 import Cobros from './pages/Cobros';
 import Comprobantes from './pages/Comprobantes';
@@ -113,14 +114,14 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-              <Route
-                path="donaciones"
-                element={
-                  <ProtectedRoute requiredPerm="donaciones">
-                    <Donaciones />
-                  </ProtectedRoute>
-                }
-              />
+
+              <Route path="excedentes" element={
+                <ProtectedRoute requiredPerm="donaciones"><Excedentes /></ProtectedRoute>
+              } />
+              <Route path="donaciones" element={
+                <ProtectedRoute requiredPerm="donaciones_fisicas"><DonacionesFisicas /></ProtectedRoute>
+              } />
+
               <Route
                 path="servicios"
                 element={

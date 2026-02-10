@@ -17,8 +17,9 @@ const permisosRoutes = require("../routes/permisos");
 const dashboardRoutes = require("../routes/dashboard");
 const reportesRoutes = require("../routes/reportes");
 const integracionRoutes = require("../routes/integracion");
-const excedentesRoute   = require('../routes/excedentes'); // NUEVO
-const comprobantesRoute = require("../routes/comprobantes"); // 👈 NUEVO
+const excedentesRoute   = require('../routes/excedentes');
+const comprobantesRoute = require("../routes/comprobantes");
+const donacionesFisicasRoutes = require('../routes/donacionesFisicas');
 const rolesRoutes = require('../routes/roles');
 const modulosRoutes = require('../routes/modulos');
 
@@ -223,6 +224,8 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reportes', reportesRoutes);
 
 app.use('/api/excedentes', excedentesRoute);
+
+app.use('/api/donaciones-fisicas', donacionesFisicasRoutes);
 
 app.use("/api/comprobantes", comprobantesRoute); // 👈 NUEVO
 

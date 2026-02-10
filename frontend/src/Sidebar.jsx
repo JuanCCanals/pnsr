@@ -23,7 +23,8 @@ const Menus = [
   { title: 'Modalidades', src: Folder, path: '/modalidades', permSlug: 'modalidades' },
   { title: 'Puntos Venta', src: Folder, path: '/puntosventa', permSlug: 'puntos_venta' },
   { title: 'Gestión', src: Folder, path: '/gestion', permSlug: 'venta_cajas' },        // FIX: era 'gestion_ventas'
-  { title: 'Donaciones', src: Folder, path: '/donaciones', permSlug: 'donaciones' },
+  { title: 'Excedentes', src: Folder, path: '/excedentes', permSlug: 'donaciones' },
+  { title: 'Donaciones', src: Folder, path: '/donaciones', permSlug: 'donaciones_fisicas' },
 
   // Servicios parroquiales
   { title: 'Servicios', src: Folder, path: '/servicios', permSlug: 'servicios' },
