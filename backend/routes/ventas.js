@@ -4,6 +4,7 @@ const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
+const PDFDocument = require('pdfkit');
 
 // Validar suma de pagos
 function validarSumaPagos(pagos, montoTotal) {
@@ -387,19 +388,23 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
     }
 
     // Determinar estado a grabar en las cajas según estado de la venta
-    // Soporte para estados individuales por caja (cajas_estados map)
-    const cajasEstadosMap = body.cajas_estados || {};
-
-    const mapEstadoToDB = (friendlyEstado) => {
-      if (friendlyEstado === 'Entregada a Benefactor') return 'entregada';
-      if (friendlyEstado === 'Asignada') return 'asignada';
-      if (friendlyEstado === 'Devuelta' || friendlyEstado === 'Devuelta por Benefactor') return 'devuelta';
-      if (friendlyEstado === 'Entregada a Familia') return 'entregada_familia';
-      return 'disponible';
-    };
-
-    // Estado global de fallback
-    let estadoCajaGlobal = mapEstadoToDB(estadoFinal);
+    let estadoCaja;
+    if (estadoFinal === 'Entregada a Benefactor') {
+      // Caja entregada al benefactor (la tiene el benefactor)
+      estadoCaja = 'entregada';
+    } else if (estadoFinal === 'Asignada') {
+      // Caso especial modalidad 160: asignada pero aún no entregada
+      estadoCaja = 'asignada';
+    } else if (estadoFinal === 'Devuelta' || estadoFinal === 'Devuelta por Benefactor') {
+      // El benefactor devolvió la caja llena
+      estadoCaja = 'devuelta';
+    } else if (estadoFinal === 'Entregada a Familia') {
+      // Caja ya fue entregada a la familia beneficiaria
+      estadoCaja = 'entregada_familia';
+    } else {
+      // Por defecto consideramos disponible / sin vender
+      estadoCaja = 'disponible';
+    }
 
 
 
@@ -422,12 +427,7 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
         ]
       );
 
-      // Usar estado individual si existe, si no, el global
-      const estadoIndividual = cajasEstadosMap[c.codigo]
-        ? mapEstadoToDB(cajasEstadosMap[c.codigo])
-        : estadoCajaGlobal;
-
-      if (estadoIndividual) {
+      if (estadoCaja) {
         await conn.query(
           `UPDATE cajas
              SET benefactor_id=?, modalidad_id=?, punto_venta_id=?, estado=?
@@ -436,7 +436,7 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
             benefactorId,
             modalidad_id,
             punto_venta_id,
-            estadoIndividual,
+            estadoCaja,
             c.id
           ]
         );
@@ -741,54 +741,142 @@ router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualiza
 });
 
 
-// GET /api/ventas/:id/cajas → obtener cajas vinculadas a una venta
-router.get('/:id/cajas', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
+// ========= TICKET PDF para venta de cajas (estilo similar a cobros) =========
+// GET /api/ventas/:id/ticket
+router.get('/:id/ticket', authenticateToken, async (req, res) => {
   try {
-    const ventaId = Number(req.params.id);
-    if (!ventaId) return res.status(400).json({ success: false, error: 'ID inválido' });
+    const { id } = req.params;
 
-    const [rows] = await pool.query(`
-      SELECT c.id, c.codigo, c.estado,
-             c.benefactor_id, c.modalidad_id, c.punto_venta_id,
-             c.fecha_asignacion, c.fecha_entrega, c.fecha_devolucion
-      FROM cajas c
-      JOIN ventas_cajas vc ON vc.caja_id = c.id
-      JOIN ventas v ON v.benefactor_id = vc.benefactor_id AND v.fecha = vc.fecha
+    // Datos de la venta
+    const [ventas] = await pool.query(`
+      SELECT v.id, v.recibo, v.fecha, v.monto, v.moneda, v.forma_pago, v.estado,
+             v.observaciones, v.fecha_operacion, v.hora_operacion, v.nro_operacion,
+             v.benefactor_id,
+             b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono,
+             b.email AS benefactor_email, b.dni AS benefactor_dni
+      FROM ventas v
+      LEFT JOIN benefactores b ON b.id = v.benefactor_id
       WHERE v.id = ?
-      ORDER BY c.codigo
-    `, [ventaId]);
+    `, [id]);
 
-    res.json({ success: true, data: rows });
+    if (!ventas.length) return res.status(404).json({ success: false, error: 'Venta no encontrada' });
+    const venta = ventas[0];
+
+    // Cajas asociadas (ventas_cajas se relaciona por benefactor_id + fecha)
+    const [cajas] = await pool.query(`
+      SELECT vc.caja_id, vc.monto, c.codigo
+      FROM ventas_cajas vc
+      LEFT JOIN cajas c ON c.id = vc.caja_id
+      WHERE vc.benefactor_id = ? AND vc.fecha = ?
+    `, [venta.benefactor_id, venta.fecha]);
+
+    // Pagos
+    const [pagos] = await pool.query(`
+      SELECT forma_pago, monto, moneda, nro_operacion
+      FROM ventas_pagos WHERE venta_id = ?
+    `, [id]);
+
+    // Footer configurable
+    const [config] = await pool.query(`
+      SELECT valor FROM configuracion_sistema WHERE clave = 'ticket_footer_text'
+    `).catch(() => [[]]);
+    const footerText = config[0]?.valor || '¡Gracias por su generosa donación!';
+
+    // Generar PDF 80mm (226.77pt)
+    const doc = new PDFDocument({
+      size: [226.77, 600],
+      margins: { top: 10, bottom: 10, left: 10, right: 10 }
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename=ticket_venta_${venta.recibo || id}.pdf`);
+    doc.pipe(res);
+
+    // === HEADER ===
+    doc.fontSize(11).text('PARROQUIA N.S. DE LA RECONCILIACIÓN', { align: 'center' });
+    doc.fontSize(8).text('CABILDO METROPOLITANO DE LIMA - RUC: 20177176771', { align: 'center' });
+    doc.fontSize(8).text('JR.CARABAYA S/N, PLAZA DE ARMAS DE LIMA - LIMA', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).text('VENTA DE CAJAS DEL AMOR', { align: 'center' });
+    doc.moveDown(0.3);
+    doc.fontSize(9).text(`Recibo: ${venta.recibo || '—'}`, { align: 'center' });
+    doc.moveDown(0.3);
+
+    // Fecha
+    const fecha = new Date(venta.fecha || Date.now());
+    doc.fontSize(8).text(
+      `FECHA: ${fecha.toLocaleDateString('es-PE')}   HORA: ${fecha.toLocaleTimeString('es-PE')}`,
+      { align: 'center' }
+    );
+    doc.moveDown(0.5);
+
+    // Benefactor
+    doc.fontSize(8);
+    if (venta.benefactor_nombre) doc.text(`BENEFACTOR: ${venta.benefactor_nombre}`);
+    if (venta.benefactor_dni) doc.text(`DNI: ${venta.benefactor_dni}`);
+    if (venta.benefactor_telefono) doc.text(`TEL: ${venta.benefactor_telefono}`);
+    doc.moveDown(0.3);
+
+    // === CAJAS ===
+    doc.moveTo(10, doc.y).lineTo(216, doc.y).stroke();
+    doc.moveDown(0.2);
+    const yH = doc.y;
+    doc.text('CAJA', 10, yH);
+    doc.text('MONTO', 165, yH);
+    doc.moveDown(0.3);
+    doc.moveTo(10, doc.y).lineTo(216, doc.y).stroke();
+    doc.moveDown(0.2);
+
+    if (cajas.length) {
+      cajas.forEach(c => {
+        const yR = doc.y;
+        doc.text(c.codigo || `#${c.caja_id}`, 10, yR, { width: 140 });
+        doc.text(`S/ ${Number(c.monto || 0).toFixed(2)}`, 165, yR);
+        doc.moveDown(0.3);
+      });
+    } else {
+      doc.text('Venta de cajas', 10);
+      doc.moveDown(0.3);
+    }
+
+    doc.moveTo(10, doc.y).lineTo(216, doc.y).stroke();
+    doc.moveDown(0.3);
+
+    // Total
+    doc.fontSize(11).text(`TOTAL: S/ ${Number(venta.monto || 0).toFixed(2)}`, { align: 'right' });
+    doc.moveDown(0.5);
+
+    // === PAGOS ===
+    doc.fontSize(8);
+    if (pagos.length) {
+      pagos.forEach(p => {
+        let txt = `${p.forma_pago}: S/ ${Number(p.monto || 0).toFixed(2)}`;
+        if (p.nro_operacion) txt += ` (Op: ${p.nro_operacion})`;
+        doc.text(txt);
+      });
+    } else {
+      let txt = `${venta.forma_pago || 'Efectivo'}: S/ ${Number(venta.monto || 0).toFixed(2)}`;
+      if (venta.nro_operacion) txt += ` (Op: ${venta.nro_operacion})`;
+      doc.text(txt);
+    }
+
+    // Observaciones
+    if (venta.observaciones) {
+      doc.moveDown(0.3);
+      doc.fontSize(7).text(`Obs: ${venta.observaciones}`);
+    }
+
+    // Footer
+    doc.moveDown(1);
+    doc.fontSize(7).text(footerText, { align: 'center', width: 206 });
+
+    doc.end();
+
   } catch (e) {
-    console.error('GET /ventas/:id/cajas', e);
-    res.status(500).json({ success: false, error: 'Error obteniendo cajas' });
+    console.error('GET /ventas/:id/ticket:', e);
+    res.status(500).json({ success: false, error: 'Error generando ticket' });
   }
 });
 
-// PUT /api/ventas/cajas/:cajaId/estado → actualizar estado individual de una caja
-router.put('/cajas/:cajaId/estado', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
-  try {
-    const cajaId = Number(req.params.cajaId);
-    const { estado } = req.body;
-    if (!cajaId || !estado) return res.status(400).json({ success: false, error: 'Datos incompletos' });
-
-    // Mapear nombre amigable → valor enum de BD
-    const MAP = {
-      'Entregada a Benefactor': 'entregada',
-      'Devuelta por Benefactor': 'devuelta',
-      'Entregada a Familia': 'entregada_familia',
-      'Asignada': 'asignada',
-      'Disponible': 'disponible',
-    };
-    const estadoDB = MAP[estado] || estado;
-
-    await pool.query(`UPDATE cajas SET estado = ? WHERE id = ?`, [estadoDB, cajaId]);
-    res.json({ success: true, message: 'Estado de caja actualizado' });
-  } catch (e) {
-    console.error('PUT /ventas/cajas/:cajaId/estado', e);
-    res.status(500).json({ success: false, error: 'Error actualizando estado de caja' });
-  }
-});
 
 module.exports = router;
-

@@ -37,7 +37,7 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
           ON c.servicio_id = s.id
         JOIN tipos_servicio ts
           ON s.tipo_servicio_id = ts.id
-        LEFT JOIN clientes cl
+        LEFT JOIN benefactores cl
           ON c.cliente_id = cl.id
         WHERE c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
 

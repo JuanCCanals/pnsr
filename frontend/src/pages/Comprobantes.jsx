@@ -92,33 +92,27 @@ const Comprobantes = () => {
 
     try {
       const token = localStorage.getItem('token');
-      
-      // El cobro_id viene directamente del backend
       const cobroId = ticket.cobro_id;
-      
-      // Hacer petición al backend para obtener el PDF
-      const response = await fetch(`${API_URL}/cobros/${cobroId}/ticket?hideCliente=1`, {
+
+      // Endpoint diferente según tipo
+      const url = ticket.tipo === 'caja'
+        ? `${API_URL}/ventas/${cobroId}/ticket`
+        : `${API_URL}/cobros/${cobroId}/ticket?hideCliente=1`;
+
+      const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (!response.ok) {
         throw new Error('Error al generar el ticket');
       }
 
-      // Convertir respuesta a blob
+      // Ambos devuelven PDF
       const blob = await response.blob();
-      
-      // Crear URL del blob y abrirlo en nueva ventana
-      const url = window.URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      
-      // Limpiar después de un momento
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-      }, 100);
+      const blobUrl = window.URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 100);
 
     } catch (error) {
       console.error('Error al imprimir ticket:', error);
