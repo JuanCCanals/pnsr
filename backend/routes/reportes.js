@@ -1,988 +1,163 @@
 /**
- * Rutas para reportes completos
- * Incluye reportes de Cajas del Amor y Servicios Parroquiales
+ * Reportes unificados — CAJAS DEL AMOR + SERVICIOS PARROQUIALES
  */
-
 const express = require('express');
-const router = express.Router();
-const pool = require('../config/db');
-const authenticateToken = require('../middlewares/auth');
+const router  = express.Router();
+const pool    = require('../config/db');
+const authenticateToken   = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
 
-// ==================== REPORTES CAJAS DEL AMOR ====================
+const mapEstado = (e) => {
+  const M = { disponible:'Disponible', asignada:'Asignada', entregada:'Entregada a Benefactor', devuelta:'Devuelta por Benefactor', entregada_familia:'Entregada a Familia' };
+  return M[String(e).toLowerCase()] || e || 'Disponible';
+};
 
-/**
- * GET /api/reportes/cajas/familias
- * Reporte: Listado completo de familias beneficiadas con todos sus datos
- * Incluye: código, responsable, dirección, zona, cantidad de integrantes y monto de caja
- */
-router.get(
-  '/cajas/familias',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { zona_id, estado_caja } = req.query;
+// ══════════════ 1. SEGUIMIENTO DE CAJAS ══════════════
+router.get('/seguimiento-cajas', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const codigo = (req.query.codigo || '').trim();
+    const zona_id = (req.query.zona_id || '').trim();
+    const estado = (req.query.estado || '').trim();
+    const w = []; const a = [];
+    if (codigo)  { w.push(`(c.codigo LIKE ? OR f.codigo_unico LIKE ?)`); a.push(`%${codigo}%`,`%${codigo}%`); }
+    if (zona_id) { w.push(`f.zona_id = ?`); a.push(zona_id); }
+    if (estado)  { w.push(`c.estado = ?`);  a.push(estado); }
+    const wSQL = w.length ? `WHERE ${w.join(' AND ')}` : '';
+    const [rows] = await pool.query(`
+      SELECT c.codigo AS codigo_caja, f.codigo_unico AS familia, c.estado,
+        z.nombre AS zona, c.fecha_devolucion,
+        b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono, b.email AS benefactor_email
+      FROM cajas c
+      LEFT JOIN familias f ON f.id=c.familia_id LEFT JOIN zonas z ON z.id=f.zona_id
+      LEFT JOIN benefactores b ON b.id=c.benefactor_id ${wSQL} ORDER BY c.codigo`, a);
+    rows.forEach(r => { r.estado_texto = mapEstado(r.estado); });
+    const [zonas] = await pool.query(`SELECT id, nombre FROM zonas ORDER BY nombre`);
+    res.json({ success:true, data:rows, zonas });
+  } catch(e) { console.error(e); res.status(500).json({success:false,error:'Error interno'}); }
+});
 
-      // Listado de familias beneficiadas con todos los datos
-      let query = `
-        SELECT 
-          f.id,
-          f.codigo_unico AS codigo,
-          COALESCE(NULLIF(f.nombre_padre, ''), f.nombre_madre) AS nombre_responsable,
-          f.direccion,
-          z.nombre AS zona,
-          COUNT(DISTINCT i.id) AS integrantes,
-          COALESCE(MAX(vc.monto), 0) AS caja_monto
-        FROM familias f
-        LEFT JOIN zonas z ON f.zona_id = z.id
-        LEFT JOIN integrantes_familia i ON f.id = i.familia_id
-        LEFT JOIN cajas c ON c.familia_id = f.id
-        LEFT JOIN ventas_cajas vc ON vc.caja_id = c.id
-        WHERE f.activo = 1
-      `;
-
-      const params = [];
-
-      if (zona_id) {
-        query += ' AND f.zona_id = ?';
-        params.push(zona_id);
+// ══════════════ 2. BENEFICIADOS ══════════════
+router.get('/beneficiados', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const [famData] = await pool.query(`
+      SELECT f.id, f.codigo_unico, f.nombre_padre, f.nombre_madre, z.nombre AS zona,
+        COUNT(i.id) AS total_integrantes,
+        MAX(CASE WHEN c.estado IN ('entregada','devuelta','entregada_familia','asignada') THEN 1 ELSE 0 END) AS asignada
+      FROM familias f LEFT JOIN integrantes_familia i ON i.familia_id=f.id
+      LEFT JOIN cajas c ON c.familia_id=f.id LEFT JOIN zonas z ON z.id=f.zona_id
+      WHERE f.activo=1 GROUP BY f.id,f.codigo_unico,f.nombre_padre,f.nombre_madre,z.nombre`);
+    let c5t=0,c5a=0,cm5t=0,cm5a=0;
+    const famRows = famData.map(f => {
+      const g = f.total_integrantes>=5?'5+ miembros':'Menos de 5';
+      if(f.total_integrantes>=5){c5t++;if(f.asignada)c5a++;}else{cm5t++;if(f.asignada)cm5a++;}
+      return {codigo:f.codigo_unico,titular:f.nombre_padre||f.nombre_madre||'',zona:f.zona||'',integrantes:f.total_integrantes,grupo:g,asignada:f.asignada?'Sí':'No'};
+    });
+    const [[{familias_sin_dependientes}]] = await pool.query(`
+      SELECT COUNT(*) AS familias_sin_dependientes FROM familias f WHERE f.activo=1
+      AND f.id NOT IN (SELECT DISTINCT i.familia_id FROM integrantes_familia i
+        WHERE i.relacion NOT IN ('padre','madre') AND (
+          (i.fecha_nacimiento IS NOT NULL AND TIMESTAMPDIFF(MONTH,i.fecha_nacimiento,CURDATE()) BETWEEN 1 AND 156)
+          OR (i.edad_texto IS NOT NULL AND i.edad_texto!='')))`);
+    const [childRows] = await pool.query(`
+      SELECT i.id,i.nombre,i.sexo,i.fecha_nacimiento,i.edad_texto,f.codigo_unico AS familia,z.nombre AS zona,
+        MAX(CASE WHEN c.estado IN ('entregada','devuelta','entregada_familia','asignada') THEN 'Asignado' ELSE 'Disponible' END) AS estado_caja
+      FROM integrantes_familia i JOIN familias f ON f.id=i.familia_id AND f.activo=1
+      LEFT JOIN cajas c ON c.familia_id=f.id LEFT JOIN zonas z ON z.id=f.zona_id
+      WHERE i.relacion NOT IN ('padre','madre')
+      GROUP BY i.id,i.nombre,i.sexo,i.fecha_nacimiento,i.edad_texto,f.codigo_unico,z.nombre`);
+    const getEdad = (r) => {
+      if(r.edad_texto&&String(r.edad_texto).trim()){
+        const t=String(r.edad_texto).trim().toLowerCase();
+        const m=t.match(/^(\d+)\s*m/i); if(m) return parseInt(m[1])/12;
+        const n=t.match(/^(\d+)$/); if(n) return parseInt(n[1]);
+        if(t==='rn') return 0; return null;
       }
+      if(r.fecha_nacimiento){const b=new Date(r.fecha_nacimiento),n=new Date();let a=n.getFullYear()-b.getFullYear();const md=n.getMonth()-b.getMonth();if(md<0||(md===0&&n.getDate()<b.getDate()))a--;return Math.max(0,a);}
+      return null;
+    };
+    const rangos=[{label:'0-3 años',min:0,max:3},{label:'4-6 años',min:4,max:6},{label:'7-9 años',min:7,max:9},{label:'10-13 años',min:10,max:13}];
+    const ninos=rangos.map(r=>({rango:r.label,total:0,asignados:0,disponibles:0}));
+    const ninas=rangos.map(r=>({rango:r.label,total:0,asignados:0,disponibles:0}));
+    const childDetail=[];
+    childRows.forEach(row=>{const edad=getEdad(row);if(edad===null||edad>13)return;const sx=String(row.sexo).toUpperCase();const arr=sx==='F'?ninas:ninos;let rl='';
+      rangos.forEach((r,i)=>{if(edad>=r.min&&edad<=r.max){arr[i].total++;if(row.estado_caja==='Asignado')arr[i].asignados++;else arr[i].disponibles++;rl=r.label;}});
+      if(rl)childDetail.push({nombre:row.nombre,sexo:sx==='F'?'Femenino':'Masculino',edad:row.edad_texto||(row.fecha_nacimiento?Math.floor(edad):''),rango:rl,familia:row.familia,zona:row.zona||'',estado:row.estado_caja});
+    });
+    res.json({success:true,data:{cards:{cinco_o_mas:{total:c5t,asignadas:c5a},menos_de_cinco:{total:cm5t,asignadas:cm5a},sin_dependientes_1m_13a:familias_sin_dependientes},ninos,ninas,familias_rows:famRows,ninos_detalle:childDetail}});
+  } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
+});
+
+// ══════════════ 3. REPORTE GENERAL ══════════════
+router.get('/general', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const [[{total_familias}]]=await pool.query(`SELECT COUNT(*) AS total_familias FROM familias WHERE activo=1`);
+    const [[{total_personas}]]=await pool.query(`SELECT COUNT(*) AS total_personas FROM integrantes_familia i JOIN familias f ON f.id=i.familia_id AND f.activo=1`);
+    const [[{familias_asignadas}]]=await pool.query(`SELECT COUNT(DISTINCT f.id) AS familias_asignadas FROM familias f JOIN cajas c ON c.familia_id=f.id WHERE f.activo=1 AND c.estado IN ('entregada','devuelta','entregada_familia','asignada')`);
+    const [[{total_cajas}]]=await pool.query(`SELECT COUNT(*) AS total_cajas FROM cajas`);
+    const [[{cajas_vendidas}]]=await pool.query(`SELECT COUNT(*) AS cajas_vendidas FROM cajas WHERE estado IN ('entregada','devuelta','entregada_familia','asignada')`);
+    const [[{cajas_devueltas}]]=await pool.query(`SELECT COUNT(*) AS cajas_devueltas FROM cajas WHERE estado IN ('devuelta','entregada_familia')`);
+    const [[{dinero_ingresado}]]=await pool.query(`SELECT COALESCE(SUM(v.monto),0) AS dinero_ingresado FROM ventas v`);
+    const pv=total_cajas>0?((cajas_vendidas/total_cajas)*100).toFixed(1):'0.0';
+    const pd=cajas_vendidas>0?((cajas_devueltas/cajas_vendidas)*100).toFixed(1):'0.0';
+    const [famRows]=await pool.query(`
+      SELECT f.codigo_unico AS codigo, COALESCE(NULLIF(f.nombre_padre,''),f.nombre_madre) AS titular,
+        z.nombre AS zona, COUNT(DISTINCT i.id) AS integrantes,
+        COALESCE(c.estado,'sin_caja') AS estado_caja, b.nombre AS benefactor
+      FROM familias f LEFT JOIN zonas z ON z.id=f.zona_id LEFT JOIN integrantes_familia i ON i.familia_id=f.id
+      LEFT JOIN cajas c ON c.familia_id=f.id LEFT JOIN benefactores b ON b.id=c.benefactor_id
+      WHERE f.activo=1 GROUP BY f.id,f.codigo_unico,f.nombre_padre,f.nombre_madre,z.nombre,c.estado,b.nombre ORDER BY f.codigo_unico`);
+    famRows.forEach(r=>{r.estado_texto=r.estado_caja==='sin_caja'?'Sin caja':mapEstado(r.estado_caja);});
+    res.json({success:true,data:{cards:{total_familias,total_personas,familias_asignadas,total_cajas,cajas_vendidas,pct_vendidas:Number(pv),cajas_devueltas,pct_devueltas:Number(pd),dinero_ingresado:Number(dinero_ingresado)},familias:famRows}});
+  } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
+});
+
+// ══════════════ 4. SERVICIOS PARROQUIALES ══════════════
+router.get('/servicios', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const tipo=(req.query.tipo_servicio_id||'').trim(), estado=(req.query.estado||'').trim();
+    const desde=(req.query.desde||'').trim(), hasta=(req.query.hasta||'').trim();
+    const w=[],a=[];
+    if(tipo){w.push(`s.tipo_servicio_id=?`);a.push(tipo);}
+    if(estado){w.push(`s.estado=?`);a.push(estado);}
+    if(desde){w.push(`s.fecha_servicio>=?`);a.push(desde);}
+    if(hasta){w.push(`s.fecha_servicio<=?`);a.push(hasta);}
+    const wSQL=w.length?`WHERE ${w.join(' AND ')}`:'';
+    const [rows]=await pool.query(`
+      SELECT s.id, ts.nombre AS tipo_servicio, s.fecha_servicio, s.hora_servicio,
+        s.descripcion, s.precio, s.estado, s.observaciones,
+        cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono
+      FROM servicios s LEFT JOIN tipos_servicio ts ON ts.id=s.tipo_servicio_id
+      LEFT JOIN benefactores cl ON cl.id=s.cliente_id ${wSQL}
+      ORDER BY s.fecha_servicio DESC, s.id DESC`, a);
+    const [tipos]=await pool.query(`SELECT id,nombre FROM tipos_servicio WHERE activo=1 ORDER BY nombre`);
+    res.json({success:true,data:rows,tipos});
+  } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
+});
+
+// ══════════════ 5. COBROS / INGRESOS ══════════════
+router.get('/cobros', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const desde=(req.query.desde||'').trim(), hasta=(req.query.hasta||'').trim();
+    const metodo=(req.query.metodo_pago_id||'').trim();
+    const w=[],a=[];
+    if(desde){w.push(`co.fecha_cobro>=?`);a.push(desde);}
+    if(hasta){w.push(`co.fecha_cobro<=?`);a.push(hasta);}
+    if(metodo){w.push(`co.metodo_pago_id=?`);a.push(metodo);}
+    const wSQL=w.length?`WHERE ${w.join(' AND ')}`:'';
+    const [rows]=await pool.query(`
+      SELECT co.id, co.concepto, co.monto, co.fecha_cobro, co.numero_comprobante, co.observaciones,
+        mp.nombre AS metodo_pago, ts.nombre AS tipo_servicio, s.fecha_servicio, s.hora_servicio,
+        s.descripcion AS descripcion_servicio, cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono,
+        co.servicio_nombre_temp
+      FROM cobros co LEFT JOIN servicios s ON s.id=co.servicio_id
+      LEFT JOIN tipos_servicio ts ON ts.id=s.tipo_servicio_id
+      LEFT JOIN benefactores cl ON cl.id=co.cliente_id
+      LEFT JOIN metodos_pago mp ON mp.id=co.metodo_pago_id ${wSQL}
+      ORDER BY co.fecha_cobro DESC, co.id DESC`, a);
+    const total=rows.reduce((s,r)=>s+Number(r.monto||0),0);
+    const [metodos]=await pool.query(`SELECT id,nombre FROM metodos_pago ORDER BY nombre`);
+    res.json({success:true,data:rows,total,metodos});
+  } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
+});
 
-      if (estado_caja) {
-        query += ' AND c.estado = ?';
-        params.push(estado_caja);
-      }
-
-      query += `
-        GROUP BY 
-          f.id,
-          f.codigo_unico,
-          f.nombre_padre,
-          f.nombre_madre,
-          f.direccion,
-          z.nombre
-        ORDER BY 
-          z.nombre,
-          nombre_responsable
-      `;
-
-      const [familias] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: familias,
-        total: familias.length,
-      });
-    } catch (error) {
-      console.error('Error en reporte familias:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/zonas
- * Reporte: Zonas beneficiadas y cantidad de familias por zona
- * Incluye: nombre de zona, cantidad de familias, cajas vendidas y disponibles
- */
-router.get(
-  '/cajas/zonas',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      // Listado de zonas beneficiadas con conteo de familias y cajas
-      const [zonas] = await pool.execute(`
-        SELECT 
-          z.id,
-          z.nombre,
-          COUNT(DISTINCT f.id) AS familias,
-          COUNT(DISTINCT c.id) AS cajas,
-          SUM(CASE WHEN c.estado = 'entregada' THEN 1 ELSE 0 END) AS cajas_vendidas,
-          SUM(CASE WHEN c.estado = 'disponible' THEN 1 ELSE 0 END) AS cajas_disponibles
-        FROM zonas z
-        LEFT JOIN familias f ON z.id = f.zona_id AND f.activo = 1
-        LEFT JOIN cajas c ON c.familia_id = f.id
-        GROUP BY z.id, z.nombre
-        ORDER BY z.nombre
-      `);
-
-      res.json({
-        success: true,
-        data: zonas,
-        total: zonas.length,
-      });
-    } catch (error) {
-      console.error('Error en reporte zonas:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/ubicacion
- * Reporte: Ubicación de cajas - dónde están siendo asignadas
- * Estados: disponible, asignada, entregada (vendida), devuelta (no vendida/completa)
- * Asunción: "entregada" = vendida al benefactor
- */
-router.get(
-  '/cajas/ubicacion',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { estado, punto_venta_id, zona_id } = req.query;
-
-      // Ubicación de cajas con su estado actual y punto de venta
-      let query = `
-        SELECT 
-          c.id,
-          c.codigo,
-          vc.monto AS monto,
-          c.estado,
-          c.punto_venta_id,
-          pv.nombre AS punto_venta,
-          f.id AS familia_id,
-          COALESCE(NULLIF(f.nombre_padre, ''), f.nombre_madre) AS nombre_responsable,
-          z.nombre AS zona,
-          c.created_at
-        FROM cajas c
-        LEFT JOIN puntos_venta pv ON c.punto_venta_id = pv.id
-        LEFT JOIN familias f ON c.familia_id = f.id
-        LEFT JOIN zonas z ON f.zona_id = z.id
-        LEFT JOIN ventas_cajas vc ON vc.caja_id = c.id
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (estado) {
-        query += ' AND c.estado = ?';
-        params.push(estado);
-      }
-
-      if (punto_venta_id) {
-        query += ' AND c.punto_venta_id = ?';
-        params.push(punto_venta_id);
-      }
-
-      if (zona_id) {
-        query += ' AND z.id = ?';
-        params.push(zona_id);
-      }
-
-      query += ' ORDER BY c.estado, c.codigo';
-
-      const [cajas] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: cajas,
-        total: cajas.length,
-      });
-    } catch (error) {
-      console.error('Error en reporte ubicación:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/ventas
- * Reporte: Venta de cajas con todos los detalles
- * Incluye: fecha, punto de venta, tipo de caja (40/160), benefactor, forma de pago
- */
-router.get(
-  '/cajas/ventas',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { desde, hasta, punto_venta_id, forma_pago } = req.query;
-
-      // Ventas de cajas con detalle completo
-      let query = `
-        SELECT 
-          v.id,
-          v.recibo AS numero_comprobante,
-          v.fecha AS fecha_venta,
-          pv.nombre AS punto_venta,
-          b.nombre AS benefactor,
-          (
-            SELECT COUNT(DISTINCT vc2.caja_id) 
-            FROM ventas_cajas vc2 
-            WHERE vc2.benefactor_id = v.benefactor_id 
-              AND DATE(vc2.fecha) = v.fecha
-          ) AS cantidad_cajas,
-          (
-            SELECT COUNT(DISTINCT vc3.caja_id)
-            FROM ventas_cajas vc3
-            WHERE vc3.benefactor_id = v.benefactor_id
-              AND DATE(vc3.fecha) = v.fecha
-              AND vc3.modalidad_id = 1
-          ) AS cajas_40,
-          (
-            SELECT COUNT(DISTINCT vc4.caja_id)
-            FROM ventas_cajas vc4
-            WHERE vc4.benefactor_id = v.benefactor_id
-              AND DATE(vc4.fecha) = v.fecha
-              AND vc4.modalidad_id = 2
-          ) AS cajas_160,
-          v.monto AS monto_total,
-          v.forma_pago
-        FROM ventas v
-        LEFT JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        LEFT JOIN benefactores b ON v.benefactor_id = b.id
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (desde) {
-        query += ' AND v.fecha >= ?';
-        params.push(desde);
-      }
-
-      if (hasta) {
-        query += ' AND v.fecha <= ?';
-        params.push(hasta);
-      }
-
-      if (punto_venta_id) {
-        query += ' AND v.punto_venta_id = ?';
-        params.push(punto_venta_id);
-      }
-
-      if (forma_pago) {
-        query += ' AND v.forma_pago = ?';
-        params.push(forma_pago);
-      }
-
-      query += ' ORDER BY v.fecha DESC, v.id DESC';
-
-      const [ventas] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: ventas,
-        total: ventas.length,
-      });
-    } catch (error) {
-      console.error('Error en reporte ventas:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/recaudacion
- * Reporte: Recaudación consolidada por punto de venta y forma de pago
- * Incluye también detalles de operaciones (Yape, Plin, Transferencias) con fecha, hora y número
- */
-router.get(
-  '/cajas/recaudacion',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { desde, hasta, punto_venta_id, forma_pago } = req.query;
-
-      // --- Recaudación por punto de venta ---
-      let pvQuery = `
-        SELECT 
-          pv.id,
-          pv.nombre,
-          COUNT(DISTINCT v.id) AS cantidad_ventas,
-          SUM(v.monto) AS total_recaudado
-        FROM ventas v
-        JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        WHERE 1 = 1
-      `;
-      const pvParams = [];
-
-      if (desde) {
-        pvQuery += ' AND v.fecha >= ?';
-        pvParams.push(desde);
-      }
-
-      if (hasta) {
-        pvQuery += ' AND v.fecha <= ?';
-        pvParams.push(hasta);
-      }
-
-      if (punto_venta_id) {
-        pvQuery += ' AND v.punto_venta_id = ?';
-        pvParams.push(punto_venta_id);
-      }
-
-      pvQuery += `
-        GROUP BY pv.id, pv.nombre
-        ORDER BY total_recaudado DESC
-      `;
-
-      const [recaudacionPV] = await pool.execute(pvQuery, pvParams);
-
-      // --- Recaudación consolidada por forma de pago ---
-      let pagoQuery = `
-        SELECT 
-          vp.forma_pago,
-          COUNT(*) AS cantidad_ventas,
-          SUM(vp.monto) AS monto
-        FROM ventas_pagos vp
-        JOIN ventas v ON vp.venta_id = v.id
-        WHERE 1 = 1
-      `;
-      const pagoParams = [];
-
-      if (desde) {
-        pagoQuery += ' AND v.fecha >= ?';
-        pagoParams.push(desde);
-      }
-
-      if (hasta) {
-        pagoQuery += ' AND v.fecha <= ?';
-        pagoParams.push(hasta);
-      }
-
-      if (forma_pago) {
-        pagoQuery += ' AND vp.forma_pago = ?';
-        pagoParams.push(forma_pago);
-      }
-
-      pagoQuery += `
-        GROUP BY vp.forma_pago
-        ORDER BY monto DESC
-      `;
-
-      const [recaudacionPago] = await pool.execute(pagoQuery, pagoParams);
-
-      // --- Detalle Yape ---
-      let yapeQuery = `
-        SELECT 
-          pv.nombre AS punto_venta,
-          vp.fecha_operacion,
-          vp.hora_operacion,
-          vp.nro_operacion AS numero_operacion,
-          vp.monto
-        FROM ventas_pagos vp
-        JOIN ventas v ON vp.venta_id = v.id
-        JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        WHERE vp.forma_pago = 'Yape'
-      `;
-      const yapeParams = [];
-
-      if (desde) {
-        yapeQuery += ' AND v.fecha >= ?';
-        yapeParams.push(desde);
-      }
-
-      if (hasta) {
-        yapeQuery += ' AND v.fecha <= ?';
-        yapeParams.push(hasta);
-      }
-
-      yapeQuery += ' ORDER BY vp.fecha_operacion DESC, vp.hora_operacion DESC';
-
-      const [detalleYape] = await pool.execute(yapeQuery, yapeParams);
-
-      // --- Detalle Plin ---
-      let plinQuery = `
-        SELECT 
-          pv.nombre AS punto_venta,
-          vp.fecha_operacion,
-          vp.hora_operacion,
-          vp.nro_operacion AS numero_operacion,
-          vp.monto
-        FROM ventas_pagos vp
-        JOIN ventas v ON vp.venta_id = v.id
-        JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        WHERE vp.forma_pago = 'Plin'
-      `;
-      const plinParams = [];
-
-      if (desde) {
-        plinQuery += ' AND v.fecha >= ?';
-        plinParams.push(desde);
-      }
-
-      if (hasta) {
-        plinQuery += ' AND v.fecha <= ?';
-        plinParams.push(hasta);
-      }
-
-      plinQuery += ' ORDER BY vp.fecha_operacion DESC, vp.hora_operacion DESC';
-
-      const [detallePlin] = await pool.execute(plinQuery, plinParams);
-
-      // --- Detalle Transferencia ---
-      let transQuery = `
-        SELECT 
-          pv.nombre AS punto_venta,
-          vp.fecha_operacion,
-          vp.hora_operacion,
-          vp.nro_operacion AS numero_operacion,
-          vp.monto
-        FROM ventas_pagos vp
-        JOIN ventas v ON vp.venta_id = v.id
-        JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        WHERE vp.forma_pago = 'Transferencia'
-      `;
-      const transParams = [];
-
-      if (desde) {
-        transQuery += ' AND v.fecha >= ?';
-        transParams.push(desde);
-      }
-
-      if (hasta) {
-        transQuery += ' AND v.fecha <= ?';
-        transParams.push(hasta);
-      }
-
-      transQuery += ' ORDER BY vp.fecha_operacion DESC, vp.hora_operacion DESC';
-
-      const [detalleTransferencia] = await pool.execute(transQuery, transParams);
-
-      // --- Detalle Transferencia Interbancaria ---
-      let interQuery = `
-        SELECT 
-          pv.nombre AS punto_venta,
-          vp.fecha_operacion,
-          vp.hora_operacion,
-          vp.nro_operacion AS numero_operacion,
-          vp.monto
-        FROM ventas_pagos vp
-        JOIN ventas v ON vp.venta_id = v.id
-        JOIN puntos_venta pv ON v.punto_venta_id = pv.id
-        WHERE vp.forma_pago LIKE '%Interbancari%'
-      `;
-      const interParams = [];
-
-      if (desde) {
-        interQuery += ' AND v.fecha >= ?';
-        interParams.push(desde);
-      }
-
-      if (hasta) {
-        interQuery += ' AND v.fecha <= ?';
-        interParams.push(hasta);
-      }
-
-      interQuery += ' ORDER BY vp.fecha_operacion DESC, vp.hora_operacion DESC';
-
-      const [detalleInterbancario] = await pool.execute(interQuery, interParams);
-
-      res.json({
-        success: true,
-        data: {
-          por_punto_venta: recaudacionPV,
-          por_forma_pago: recaudacionPago,
-          detalle_yape: detalleYape,
-          detalle_plin: detallePlin,
-          detalle_transferencia: detalleTransferencia,
-          detalle_interbancario: detalleInterbancario,
-        },
-      });
-    } catch (error) {
-      console.error('Error en reporte recaudación:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/estado
- * Reporte: Estado de cajas según disponibilidad
- */
-router.get(
-  '/cajas/estado',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { estado, punto_venta_id, zona_id } = req.query;
-
-      let query = `
-        SELECT 
-          c.estado,
-          COUNT(*) AS cantidad,
-          SUM(CASE WHEN vc.monto = 40 THEN 1 ELSE 0 END) AS cajas_40,
-          SUM(CASE WHEN vc.monto = 160 THEN 1 ELSE 0 END) AS cajas_160,
-          SUM(COALESCE(vc.monto, 0)) AS monto_total
-        FROM cajas c
-        LEFT JOIN familias f ON c.familia_id = f.id
-        LEFT JOIN zonas z ON f.zona_id = z.id
-        LEFT JOIN ventas_cajas vc ON vc.caja_id = c.id
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (estado) {
-        query += ' AND c.estado = ?';
-        params.push(estado);
-      }
-
-      if (punto_venta_id) {
-        query += ' AND c.punto_venta_id = ?';
-        params.push(punto_venta_id);
-      }
-
-      if (zona_id) {
-        query += ' AND z.id = ?';
-        params.push(zona_id);
-      }
-
-      query += `
-        GROUP BY c.estado
-        ORDER BY cantidad DESC
-      `;
-
-      const [estados] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: estados,
-      });
-    } catch (error) {
-      console.error('Error en reporte estado:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/campania-resumen
- * Reporte: Información de campaña - avance de meta
- */
-router.get(
-  '/cajas/campania-resumen',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const [campania] = await pool.execute('SELECT * FROM campanias LIMIT 1');
-
-      const [totalRecaudado] = await pool.execute(
-        'SELECT SUM(monto) AS total FROM ventas'
-      );
-
-      const [cajasVendidas] = await pool.execute(
-        'SELECT COUNT(*) AS total FROM cajas WHERE estado = "entregada"'
-      );
-
-      const [cajasNoVendidas] = await pool.execute(
-        'SELECT COUNT(*) AS total FROM cajas WHERE estado = "disponible"'
-      );
-
-      const [cajasDevueltas] = await pool.execute(
-        'SELECT COUNT(*) AS total FROM cajas WHERE estado = "devuelta"'
-      );
-
-      const [cajas160] = await pool.execute(
-        `
-        SELECT 
-          COUNT(DISTINCT c.id) AS cantidad,
-          SUM(vc.monto) AS monto
-        FROM ventas_cajas vc
-        JOIN cajas c ON vc.caja_id = c.id
-        WHERE vc.monto = 160
-      `
-      );
-
-      const metaData = campania[0] || { meta_monto: 0 };
-      const recaudado = totalRecaudado[0]?.total || 0;
-      const porcentajeAvance =
-        metaData.meta_monto > 0
-          ? Math.round((recaudado / metaData.meta_monto) * 100)
-          : 0;
-
-      res.json({
-        success: true,
-        data: {
-          campania: metaData,
-          total_recaudado: recaudado,
-          cajas_vendidas: cajasVendidas[0]?.total || 0,
-          cajas_no_vendidas: cajasNoVendidas[0]?.total || 0,
-          cajas_devueltas: cajasDevueltas[0]?.total || 0,
-          cajas_160: {
-            cantidad: cajas160[0]?.cantidad || 0,
-            monto: cajas160[0]?.monto || 0,
-          },
-          porcentaje_avance: porcentajeAvance,
-        },
-      });
-    } catch (error) {
-      console.error('Error en reporte campaña:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/cajas/segmentacion-edades
- * Reporte: Segmentación por edades (Total / Vendidas / No vendidas)
- */
-router.get(
-  '/cajas/segmentacion-edades',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      // Totales
-      let queryTotal = `
-        SELECT 
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninos_0_4_total,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninas_0_4_total,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninos_5_10_total,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninas_5_10_total,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninos_11_13_total,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninas_11_13_total
-        FROM integrantes_familia i
-        JOIN familias f ON i.familia_id = f.id
-        WHERE f.activo = 1
-      `;
-
-      const [totales] = await pool.execute(queryTotal);
-
-      // Vendidas (caja estado = 'entregada')
-      let queryVendidas = `
-        SELECT 
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninos_0_4_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninas_0_4_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninos_5_10_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninas_5_10_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninos_11_13_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninas_11_13_vendidas
-        FROM integrantes_familia i
-        JOIN familias f ON i.familia_id = f.id
-        LEFT JOIN cajas c ON c.familia_id = f.id
-        WHERE f.activo = 1 
-          AND c.estado = 'entregada'
-      `;
-
-      const [vendidas] = await pool.execute(queryVendidas);
-
-      // No vendidas
-      let queryNoVendidas = `
-        SELECT 
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninos_0_4_no_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 0 AND 4 
-            THEN 1 ELSE 0 
-          END) AS ninas_0_4_no_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninos_5_10_no_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 5 AND 10 
-            THEN 1 ELSE 0 
-          END) AS ninas_5_10_no_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'M' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninos_11_13_no_vendidas,
-          SUM(CASE 
-            WHEN i.sexo = 'F' 
-            AND TIMESTAMPDIFF(YEAR, i.fecha_nacimiento, NOW()) BETWEEN 11 AND 13 
-            THEN 1 ELSE 0 
-          END) AS ninas_11_13_no_vendidas
-        FROM integrantes_familia i
-        JOIN familias f ON i.familia_id = f.id
-        LEFT JOIN cajas c ON c.familia_id = f.id
-        WHERE f.activo = 1
-          AND (
-            c.id IS NULL
-            OR c.estado IN ('disponible', 'asignada', 'devuelta')
-          )
-      `;
-
-      const [noVendidas] = await pool.execute(queryNoVendidas);
-
-      const totalesDefault = {
-        ninos_0_4_total: 0,
-        ninas_0_4_total: 0,
-        ninos_5_10_total: 0,
-        ninas_5_10_total: 0,
-        ninos_11_13_total: 0,
-        ninas_11_13_total: 0,
-      };
-
-      const vendidasDefault = {
-        ninos_0_4_vendidas: 0,
-        ninas_0_4_vendidas: 0,
-        ninos_5_10_vendidas: 0,
-        ninas_5_10_vendidas: 0,
-        ninos_11_13_vendidas: 0,
-        ninas_11_13_vendidas: 0,
-      };
-
-      const noVendidasDefault = {
-        ninos_0_4_no_vendidas: 0,
-        ninas_0_4_no_vendidas: 0,
-        ninos_5_10_no_vendidas: 0,
-        ninas_5_10_no_vendidas: 0,
-        ninos_11_13_no_vendidas: 0,
-        ninas_11_13_no_vendidas: 0,
-      };
-
-      res.json({
-        success: true,
-        data: {
-          totales: totales[0] || totalesDefault,
-          vendidas: vendidas[0] || vendidasDefault,
-          no_vendidas: noVendidas[0] || noVendidasDefault,
-        },
-      });
-    } catch (error) {
-      console.error('Error en reporte segmentación por edades:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-// ==================== REPORTES SERVICIOS PARROQUIALES ====================
-
-/**
- * GET /api/reportes/servicios/por-tipo
- * Reporte: cantidad y monto recaudado por tipo de servicio
- * Usa tablas: servicios, tipos_servicio
- */
-router.get(
-  '/servicios/por-tipo',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { desde, hasta } = req.query;
-
-      let query = `
-        SELECT 
-          ts.id,
-          ts.nombre,
-          COUNT(s.id) AS cantidad,
-          COALESCE(SUM(s.precio), 0) AS monto_recaudado
-        FROM servicios s
-        JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (desde) {
-        query += ' AND s.fecha_servicio >= ?';
-        params.push(desde);
-      }
-
-      if (hasta) {
-        query += ' AND s.fecha_servicio <= ?';
-        params.push(hasta);
-      }
-
-      query += `
-        GROUP BY ts.id, ts.nombre
-        ORDER BY monto_recaudado DESC
-      `;
-
-      const [rows] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: rows,
-      });
-    } catch (error) {
-      console.error('Error en reporte servicios por tipo:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/servicios/ingresos
- * Reporte: ingresos por servicio (tipo), con total y promedio
- */
-router.get(
-  '/servicios/ingresos',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { desde, hasta } = req.query;
-
-      let query = `
-        SELECT 
-          ts.id,
-          ts.nombre,
-          COUNT(s.id) AS cantidad_servicios,
-          COALESCE(SUM(s.precio), 0) AS total_ingresos,
-          CASE 
-            WHEN COUNT(s.id) > 0 THEN ROUND(SUM(s.precio) / COUNT(s.id), 2)
-            ELSE 0
-          END AS promedio_ingreso
-        FROM servicios s
-        JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (desde) {
-        query += ' AND s.fecha_servicio >= ?';
-        params.push(desde);
-      }
-
-      if (hasta) {
-        query += ' AND s.fecha_servicio <= ?';
-        params.push(hasta);
-      }
-
-      query += `
-        GROUP BY ts.id, ts.nombre
-        ORDER BY total_ingresos DESC
-      `;
-
-      const [rows] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: rows,
-      });
-    } catch (error) {
-      console.error('Error en reporte ingresos servicios:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-/**
- * GET /api/reportes/servicios/estado
- * Reporte: cantidad de servicios por estado (programado, realizado, cancelado)
- */
-router.get(
-  '/servicios/estado',
-  authenticateToken,
-  authorizePermission('reportes'),
-  async (req, res) => {
-    try {
-      const { desde, hasta } = req.query;
-
-      let query = `
-        SELECT 
-          s.estado,
-          COUNT(*) AS cantidad
-        FROM servicios s
-        WHERE 1 = 1
-      `;
-
-      const params = [];
-
-      if (desde) {
-        query += ' AND s.fecha_servicio >= ?';
-        params.push(desde);
-      }
-
-      if (hasta) {
-        query += ' AND s.fecha_servicio <= ?';
-        params.push(hasta);
-      }
-
-      query += `
-        GROUP BY s.estado
-        ORDER BY cantidad DESC
-      `;
-
-      const [rows] = await pool.execute(query, params);
-
-      res.json({
-        success: true,
-        data: rows,
-      });
-    } catch (error) {
-      console.error('Error en reporte estado servicios:', error);
-      res
-        .status(500)
-        .json({ success: false, error: 'Error interno del servidor' });
-    }
-  }
-);
-
-// 👇 Asegúrate de que esta línea quede al final
 module.exports = router;

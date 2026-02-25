@@ -387,23 +387,19 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
     }
 
     // Determinar estado a grabar en las cajas según estado de la venta
-    let estadoCaja;
-    if (estadoFinal === 'Entregada a Benefactor') {
-      // Caja entregada al benefactor (la tiene el benefactor)
-      estadoCaja = 'entregada';
-    } else if (estadoFinal === 'Asignada') {
-      // Caso especial modalidad 160: asignada pero aún no entregada
-      estadoCaja = 'asignada';
-    } else if (estadoFinal === 'Devuelta' || estadoFinal === 'Devuelta por Benefactor') {
-      // El benefactor devolvió la caja llena
-      estadoCaja = 'devuelta';
-    } else if (estadoFinal === 'Entregada a Familia') {
-      // Caja ya fue entregada a la familia beneficiaria
-      estadoCaja = 'entregada_familia';
-    } else {
-      // Por defecto consideramos disponible / sin vender
-      estadoCaja = 'disponible';
-    }
+    // Soporte para estados individuales por caja (cajas_estados map)
+    const cajasEstadosMap = body.cajas_estados || {};
+
+    const mapEstadoToDB = (friendlyEstado) => {
+      if (friendlyEstado === 'Entregada a Benefactor') return 'entregada';
+      if (friendlyEstado === 'Asignada') return 'asignada';
+      if (friendlyEstado === 'Devuelta' || friendlyEstado === 'Devuelta por Benefactor') return 'devuelta';
+      if (friendlyEstado === 'Entregada a Familia') return 'entregada_familia';
+      return 'disponible';
+    };
+
+    // Estado global de fallback
+    let estadoCajaGlobal = mapEstadoToDB(estadoFinal);
 
 
 
@@ -426,7 +422,12 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
         ]
       );
 
-      if (estadoCaja) {
+      // Usar estado individual si existe, si no, el global
+      const estadoIndividual = cajasEstadosMap[c.codigo]
+        ? mapEstadoToDB(cajasEstadosMap[c.codigo])
+        : estadoCajaGlobal;
+
+      if (estadoIndividual) {
         await conn.query(
           `UPDATE cajas
              SET benefactor_id=?, modalidad_id=?, punto_venta_id=?, estado=?
@@ -435,7 +436,7 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
             benefactorId,
             modalidad_id,
             punto_venta_id,
-            estadoCaja,
+            estadoIndividual,
             c.id
           ]
         );
@@ -740,4 +741,54 @@ router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualiza
 });
 
 
+// GET /api/ventas/:id/cajas → obtener cajas vinculadas a una venta
+router.get('/:id/cajas', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
+  try {
+    const ventaId = Number(req.params.id);
+    if (!ventaId) return res.status(400).json({ success: false, error: 'ID inválido' });
+
+    const [rows] = await pool.query(`
+      SELECT c.id, c.codigo, c.estado,
+             c.benefactor_id, c.modalidad_id, c.punto_venta_id,
+             c.fecha_asignacion, c.fecha_entrega, c.fecha_devolucion
+      FROM cajas c
+      JOIN ventas_cajas vc ON vc.caja_id = c.id
+      JOIN ventas v ON v.benefactor_id = vc.benefactor_id AND v.fecha = vc.fecha
+      WHERE v.id = ?
+      ORDER BY c.codigo
+    `, [ventaId]);
+
+    res.json({ success: true, data: rows });
+  } catch (e) {
+    console.error('GET /ventas/:id/cajas', e);
+    res.status(500).json({ success: false, error: 'Error obteniendo cajas' });
+  }
+});
+
+// PUT /api/ventas/cajas/:cajaId/estado → actualizar estado individual de una caja
+router.put('/cajas/:cajaId/estado', authenticateToken, authorizePermission('venta_cajas.actualizar'), async (req, res) => {
+  try {
+    const cajaId = Number(req.params.cajaId);
+    const { estado } = req.body;
+    if (!cajaId || !estado) return res.status(400).json({ success: false, error: 'Datos incompletos' });
+
+    // Mapear nombre amigable → valor enum de BD
+    const MAP = {
+      'Entregada a Benefactor': 'entregada',
+      'Devuelta por Benefactor': 'devuelta',
+      'Entregada a Familia': 'entregada_familia',
+      'Asignada': 'asignada',
+      'Disponible': 'disponible',
+    };
+    const estadoDB = MAP[estado] || estado;
+
+    await pool.query(`UPDATE cajas SET estado = ? WHERE id = ?`, [estadoDB, cajaId]);
+    res.json({ success: true, message: 'Estado de caja actualizado' });
+  } catch (e) {
+    console.error('PUT /ventas/cajas/:cajaId/estado', e);
+    res.status(500).json({ success: false, error: 'Error actualizando estado de caja' });
+  }
+});
+
 module.exports = router;
+

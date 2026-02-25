@@ -14,7 +14,6 @@ const CATEGORIAS = [
   { value: 'articulos_hogar',          label: 'Artículos del hogar' },
   { value: 'medicinas',                label: 'Medicinas' },
   { value: 'utiles_escolares',         label: 'Útiles escolares' },
-  { value: 'dinero_efectivo',          label: 'Dinero en efectivo' },
   { value: 'otros',                    label: 'Otros' },
 ];
 

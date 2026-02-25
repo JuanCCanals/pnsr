@@ -161,7 +161,7 @@ const Excedentes = () => {
         formData.venta_id !== null &&
         formData.venta_id.toString().trim() !== ''
       ) {
-        payload.venta_id = Number(formData.venta_id);
+        payload.venta_id = formData.venta_id.toString().trim();
       }
 
       // Sólo mandamos fecha si el usuario la llenó
@@ -308,7 +308,7 @@ const Excedentes = () => {
                   Código de Caja (opcional)
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   value={formData.venta_id}
                   onChange={(e) =>
                     setFormData({
@@ -317,7 +317,7 @@ const Excedentes = () => {
                     })
                   }
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ej: 101"
+                  placeholder="Ej: AQP001"
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   Puedes dejarlo en blanco si el excedente no está asociado a

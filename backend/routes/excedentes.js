@@ -143,7 +143,7 @@ router.post(
       const normalizedVentaId =
         venta_id === undefined || venta_id === null || venta_id === ''
           ? null
-          : Number(venta_id);
+          : String(venta_id).trim();
 
       const params = [normalizedVentaId, excedente];
       let sql =
@@ -208,7 +208,7 @@ router.put(
 
       if (venta_id !== undefined) {
         const normalizedVentaId =
-          venta_id === null || venta_id === '' ? null : Number(venta_id);
+          venta_id === null || venta_id === '' ? null : String(venta_id).trim();
         fields.push('venta_id = ?');
         params.push(normalizedVentaId);
       }

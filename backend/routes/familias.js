@@ -267,6 +267,67 @@ router.get('/labels/bulk', authenticateToken, authorizePermission('familias.leer
 });
 
 
+// ========= CAJAS: Listado paginado con filtros =========
+// GET /api/familias/cajas?search=&estado=&zona_id=&page=1&limit=20
+// IMPORTANTE: debe estar ANTES de /:id para que Express no lo confunda
+router.get('/cajas', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
+  try {
+    const search  = (req.query.search || '').trim();
+    const estado  = (req.query.estado || '').trim();
+    const zona_id = (req.query.zona_id || '').trim();
+    const page    = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit   = Math.min(200, Math.max(1, parseInt(req.query.limit || '20', 10)));
+    const offset  = (page - 1) * limit;
+
+    const where = [];
+    const args  = [];
+
+    if (search) {
+      where.push(`(c.codigo LIKE ? OR f.codigo_unico LIKE ?)`);
+      args.push(`%${search}%`, `%${search}%`);
+    }
+    if (estado)  { where.push(`c.estado = ?`);    args.push(estado); }
+    if (zona_id) { where.push(`f.zona_id = ?`);   args.push(zona_id); }
+
+    const whereSQL = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [[{ total }]] = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM cajas c
+       LEFT JOIN familias f ON f.id = c.familia_id
+       ${whereSQL}`, args
+    );
+
+    const [rows] = await pool.query(
+      `SELECT c.id, c.codigo, c.estado, c.benefactor_id, c.fecha_asignacion,
+              c.fecha_entrega, c.fecha_devolucion,
+              f.codigo_unico, f.zona_id,
+              z.nombre AS zona_nombre,
+              b.nombre AS benefactor_nombre
+       FROM cajas c
+       LEFT JOIN familias f ON f.id = c.familia_id
+       LEFT JOIN zonas z ON z.id = f.zona_id
+       LEFT JOIN benefactores b ON b.id = c.benefactor_id
+       ${whereSQL}
+       ORDER BY c.codigo ASC
+       LIMIT ? OFFSET ?`,
+      [...args, limit, offset]
+    );
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: { page, limit, total, totalPages, hasPrev: page > 1, hasNext: page < totalPages }
+    });
+  } catch (e) {
+    console.error('GET /familias/cajas:', e);
+    res.status(500).json({ success: false, error: 'Error listando cajas' });
+  }
+});
+
+
 // Obtener una familia por ID con integrantes
 router.get('/:id', authenticateToken, authorizePermission('familias.leer'), async (req, res) => {
   try {
@@ -850,7 +911,7 @@ router.get('/:id/integrantes', authenticateToken, authorizePermission('familias.
     const { id } = req.params;
 
     const [rows] = await pool.execute(`
-      SELECT id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      SELECT id, familia_id, nombre, fecha_nacimiento, edad_texto, relacion, sexo, observaciones
       FROM integrantes_familia 
       WHERE familia_id = ? 
       ORDER BY 

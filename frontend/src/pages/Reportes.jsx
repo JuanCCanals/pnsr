@@ -1,867 +1,528 @@
 // frontend/src/pages/Reportes.jsx
-/**
- * Página de reportes con exportación a Excel
- * Incluye reportes de Cajas del Amor y Servicios Parroquiales
- * 
- * Fase 4: Reportes Completos con Exportación a Excel
- */
-
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const hdr = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}` });
+const get = async (url) => { const r = await fetch(`${API}${url}`, { headers: hdr() }); return r.json(); };
+const toYMD = (v) => { if (!v) return ''; const d = new Date(v); if (isNaN(d)) return ''; return d.toISOString().slice(0, 10); };
+const fmtDate = (v) => { const s = toYMD(v); if (!s) return '—'; const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; };
+const fmtMoney = (v) => `S/ ${Number(v || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}`;
 
-// Función para exportar a Excel
-const exportToExcel = (data, filename, sheetName = 'Reporte') => {
-  const worksheet = XLSX.utils.json_to_sheet(data);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-  XLSX.writeFile(workbook, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+const exportXlsx = (rows, name) => {
+  if (!rows?.length) return;
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Reporte');
+  XLSX.writeFile(wb, `${name}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
 
-// Componente de tabla con filtros genéricos (lo usamos solo donde conviene)
-const ReportTable = ({ title, data, columns, onExport, filters, onFilterChange, loading }) => {
+// ════════════════════════ Shared UI ════════════════════════
+const Card = ({ label, value, sub, color = 'blue' }) => {
+  const c = { blue:'bg-blue-50 border-blue-200 text-blue-800', green:'bg-green-50 border-green-200 text-green-800',
+    yellow:'bg-yellow-50 border-yellow-200 text-yellow-800', purple:'bg-purple-50 border-purple-200 text-purple-800',
+    gray:'bg-gray-50 border-gray-200 text-gray-800' };
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-      <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">{title}</h2>
+    <div className={`rounded-lg border p-4 ${c[color] || c.blue}`}>
+      <div className="text-xs font-medium uppercase tracking-wider opacity-70">{label}</div>
+      <div className="text-2xl font-bold mt-1">{value}</div>
+      {sub && <div className="text-sm mt-1 opacity-80">{sub}</div>}
+    </div>
+  );
+};
 
-        {/* Filtros genéricos */}
-        {filters && Object.keys(filters).length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-            {Object.entries(filters).map(([key, value]) => (
-              <div key={key}>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  {key.charAt(0).toUpperCase() + key.slice(1)}
-                </label>
-                <input
-                  type={key.includes('fecha') || key.includes('desde') || key.includes('hasta') ? 'date' : 'text'}
-                  value={value}
-                  onChange={(e) => onFilterChange(key, e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+const ExportBtn = ({ onClick, disabled }) => (
+  <button onClick={onClick} disabled={disabled}
+    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 text-sm flex items-center gap-1">
+    📥 Exportar Excel
+  </button>
+);
+
+const SubTabs = ({ tabs, active, onChange }) => (
+  <div className="flex gap-1 mb-4 border-b border-gray-200 dark:border-gray-700">
+    {tabs.map(t => (
+      <button key={t.id} onClick={() => onChange(t.id)}
+        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+          active === t.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+        {t.label}
+      </button>
+    ))}
+  </div>
+);
+
+// ═══════════════════ 1. SEGUIMIENTO DE CAJAS ═══════════════════
+const SeguimientoCajas = () => {
+  const [rows, setRows] = useState([]);
+  const [zonas, setZonas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fCodigo, setFCodigo] = useState('');
+  const [fZona, setFZona] = useState('');
+  const [fEstado, setFEstado] = useState('');
+
+  const ESTADOS = [
+    { value: 'disponible', label: 'Disponible' }, { value: 'asignada', label: 'Asignada' },
+    { value: 'entregada', label: 'Entregada a Benefactor' }, { value: 'devuelta', label: 'Devuelta por Benefactor' },
+    { value: 'entregada_familia', label: 'Entregada a Familia' },
+  ];
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (fCodigo) p.set('codigo', fCodigo);
+    if (fZona) p.set('zona_id', fZona);
+    if (fEstado) p.set('estado', fEstado);
+    const r = await get(`/reportes/seguimiento-cajas?${p}`);
+    if (r.success) { setRows(r.data); if (r.zonas) setZonas(r.zonas); }
+    setLoading(false);
+  }, [fCodigo, fZona, fEstado]);
+
+  useEffect(() => { fetchData(); }, []);
+
+  const handleExport = () => exportXlsx(rows.map(r => ({
+    'Código Caja': r.codigo_caja, 'Familia': r.familia || '', 'Estado': r.estado_texto,
+    'Zona': r.zona || '', 'Fecha Devolución': fmtDate(r.fecha_devolucion),
+    'Benefactor': r.benefactor_nombre || '', 'Teléfono': r.benefactor_telefono || '', 'Email': r.benefactor_email || '',
+  })), 'Seguimiento_Cajas');
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-3 mb-4 items-end">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Código caja/familia</label>
+          <input value={fCodigo} onChange={e => setFCodigo(e.target.value)} placeholder="Ej: AQP001"
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white w-40" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Zona</label>
+          <select value={fZona} onChange={e => setFZona(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todas</option>
+            {zonas.map(z => <option key={z.id} value={z.id}>{z.nombre}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Estado</label>
+          <select value={fEstado} onChange={e => setFEstado(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todos</option>
+            {ESTADOS.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
+          </select>
+        </div>
+        <button onClick={fetchData} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Filtrar</button>
+        <button onClick={() => { setFCodigo(''); setFZona(''); setFEstado(''); setTimeout(fetchData, 50); }}
+          className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
+        <div className="flex-1" />
+        <ExportBtn onClick={handleExport} disabled={!rows.length} />
+      </div>
+      <div className="text-xs text-gray-500 mb-2">{rows.length} registro(s)</div>
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              {['Código Caja','Familia','Estado','Zona','Fec. Devolución','Benefactor','Teléfono','Email'].map(h =>
+                <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y dark:divide-gray-600">
+            {loading && <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {!loading && rows.map((r, i) => (
+              <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <td className="px-3 py-2 font-medium dark:text-white">{r.codigo_caja}</td>
+                <td className="px-3 py-2 dark:text-white">{r.familia || '—'}</td>
+                <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${
+                  r.estado==='entregada'?'bg-orange-100 text-orange-800':
+                  r.estado==='devuelta'?'bg-green-100 text-green-800':
+                  r.estado==='entregada_familia'?'bg-blue-100 text-blue-800':
+                  r.estado==='asignada'?'bg-yellow-100 text-yellow-800':'bg-gray-100 text-gray-700'}`}>{r.estado_texto}</span></td>
+                <td className="px-3 py-2 dark:text-white">{r.zona || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{fmtDate(r.fecha_devolucion)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_nombre || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_telefono || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_email || '—'}</td>
+              </tr>
             ))}
-          </div>
-        )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
-        {/* Botón exportar */}
-        <button
-          onClick={onExport}
-          disabled={!data || data.length === 0 || loading}
-          className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-        >
-          📥 Exportar a Excel
-        </button>
+// ═══════════════════ 2. BENEFICIADOS ═══════════════════
+const Beneficiados = () => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [subTab, setSubTab] = useState('familias');
+
+  useEffect(() => { (async () => { setLoading(true); const r = await get('/reportes/beneficiados'); if (r.success) setData(r.data); setLoading(false); })(); }, []);
+
+  if (loading) return <div className="py-8 text-center text-gray-500">Cargando…</div>;
+  if (!data) return <div className="py-8 text-center text-red-500">Error al cargar</div>;
+
+  const { cards, ninos, ninas, familias_rows, ninos_detalle } = data;
+
+  const RangoTable = ({ title, rows }) => (
+    <div className="mb-4">
+      <h4 className="text-sm font-semibold mb-2 dark:text-gray-300">{title}</h4>
+      <table className="w-full text-sm border rounded">
+        <thead className="bg-gray-50 dark:bg-gray-700">
+          <tr>{['Rango','Total','Asignados','Disponibles'].map(h => <th key={h} className="px-3 py-2 text-right first:text-left dark:text-gray-300">{h}</th>)}</tr>
+        </thead>
+        <tbody className="divide-y dark:divide-gray-600">
+          {rows.map((r, i) => <tr key={i}><td className="px-3 py-2 dark:text-white">{r.rango}</td><td className="px-3 py-2 text-right font-medium dark:text-white">{r.total}</td><td className="px-3 py-2 text-right text-green-700">{r.asignados}</td><td className="px-3 py-2 text-right text-orange-700">{r.disponibles}</td></tr>)}
+          <tr className="bg-gray-50 dark:bg-gray-700 font-semibold"><td className="px-3 py-2 dark:text-white">TOTAL</td><td className="px-3 py-2 text-right dark:text-white">{rows.reduce((s,r)=>s+r.total,0)}</td><td className="px-3 py-2 text-right text-green-700">{rows.reduce((s,r)=>s+r.asignados,0)}</td><td className="px-3 py-2 text-right text-orange-700">{rows.reduce((s,r)=>s+r.disponibles,0)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+        <Card label="Familias 5+ miembros" value={cards.cinco_o_mas.total} sub={`${cards.cinco_o_mas.asignadas} asignadas`} color="blue" />
+        <Card label="Familias menos de 5" value={cards.menos_de_cinco.total} sub={`${cards.menos_de_cinco.asignadas} asignadas`} color="purple" />
+        <Card label="Sin dependientes (1m–13a)" value={cards.sin_dependientes_1m_13a} sub="No tienen niños en rango" color="yellow" />
       </div>
 
-      {/* Tabla */}
-      {loading ? (
-        <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-          <p className="text-gray-600 dark:text-gray-400">Cargando datos...</p>
-        </div>
-      ) : data && data.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100 dark:bg-gray-700">
-              <tr>
-                {columns.map((col) => (
-                  <th key={col} className="px-4 py-2 text-left font-semibold text-gray-900 dark:text-white">
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {data.map((row, idx) => (
-                <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                  {columns.map((col) => (
-                    <td key={col} className="px-4 py-2 text-gray-900 dark:text-white">
-                      {typeof row[col] === 'number' ? row[col].toLocaleString('es-PE') : row[col] || '-'}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-4">
-            Total de registros: {data.length}
-          </p>
-        </div>
-      ) : (
-        <p className="text-center py-8 text-gray-600 dark:text-gray-400">
-          No hay datos disponibles
-        </p>
+      <SubTabs tabs={[{id:'familias',label:'Tabla Familias'},{id:'ninos',label:'Niños/Niñas por Rango'},{id:'detalle',label:'Detalle Niños'}]}
+        active={subTab} onChange={setSubTab} />
+
+      {subTab === 'familias' && (
+        <>
+          <div className="flex justify-end mb-2"><ExportBtn onClick={() => exportXlsx(familias_rows, 'Beneficiados_Familias')} disabled={!familias_rows.length} /></div>
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>{['Código','Titular','Zona','Integrantes','Grupo','Asignada'].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-600">
+                {familias_rows.map((r, i) => <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <td className="px-3 py-2 font-medium dark:text-white">{r.codigo}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.titular}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.zona}</td>
+                  <td className="px-3 py-2 text-center dark:text-white">{r.integrantes}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.grupo}</td>
+                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${r.asignada==='Sí'?'bg-green-100 text-green-800':'bg-gray-100 text-gray-700'}`}>{r.asignada}</span></td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">{familias_rows.length} familia(s)</div>
+        </>
+      )}
+
+      {subTab === 'ninos' && (
+        <>
+          <div className="flex justify-end mb-2"><ExportBtn onClick={() => {
+            const all = [...ninos.map(r => ({ ...r, sexo: 'Masculino' })), ...ninas.map(r => ({ ...r, sexo: 'Femenino' }))];
+            exportXlsx(all, 'Beneficiados_Rangos');
+          }} disabled={false} /></div>
+          <RangoTable title="Niños (M)" rows={ninos} />
+          <RangoTable title="Niñas (F)" rows={ninas} />
+        </>
+      )}
+
+      {subTab === 'detalle' && (
+        <>
+          <div className="flex justify-end mb-2"><ExportBtn onClick={() => exportXlsx(ninos_detalle, 'Beneficiados_Detalle_Ninos')} disabled={!ninos_detalle.length} /></div>
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>{['Nombre','Sexo','Edad','Rango','Familia','Zona','Estado'].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-600">
+                {ninos_detalle.map((r, i) => <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <td className="px-3 py-2 dark:text-white">{r.nombre}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.sexo}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.edad}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.rango}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.familia}</td>
+                  <td className="px-3 py-2 dark:text-white">{r.zona}</td>
+                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${r.estado==='Asignado'?'bg-green-100 text-green-800':'bg-orange-100 text-orange-800'}`}>{r.estado}</span></td>
+                </tr>)}
+                {!ninos_detalle.length && <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-xs text-gray-500 mt-2">{ninos_detalle.length} niño(s)</div>
+        </>
       )}
     </div>
   );
 };
 
-export default function Reportes() {
-  const [activeTab, setActiveTab] = useState('cajas');
-  const [loading, setLoading] = useState(false);
+// ═══════════════════ 3. REPORTE GENERAL ═══════════════════
+const ReporteGeneral = () => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const FAMILIAS_MAX_MOSTRAR = 20;
-  const CAJAS_MAX_MOSTRAR = 20;
-  const VENTAS_MAX_MOSTRAR = 20;
+  useEffect(() => { (async () => { setLoading(true); const r = await get('/reportes/general'); if (r.success) setData(r.data); setLoading(false); })(); }, []);
 
-  // Estado para reportes de cajas
-  const [familias, setFamilias] = useState([]);
-  const [zonasData, setZonasData] = useState([]);
-  const [ubicacionCajas, setUbicacionCajas] = useState([]);
-  const [ventasCajas, setVentasCajas] = useState([]);
-  const [recaudacionPV, setRecaudacionPV] = useState([]);
-  const [recaudacionForma, setRecaudacionForma] = useState([]);
-  const [detalleYape, setDetalleYape] = useState([]);
-  const [detallePlin, setDetallePlin] = useState([]);
-  const [detalleTransferencia, setDetalleTransferencia] = useState([]);
-  const [detalleInterbancario, setDetalleInterbancario] = useState([]);
-  const [estadoCajas, setEstadoCajas] = useState([]);
-  const [campaniaResumen, setCampaniaResumen] = useState(null);
-  const [segmentacionEdades, setSegmentacionEdades] = useState(null);
-  const [tamanioFamilias, setTamanioFamilias] = useState(null);
+  if (loading) return <div className="py-8 text-center text-gray-500">Cargando…</div>;
+  if (!data) return <div className="py-8 text-center text-red-500">Error</div>;
 
-  const ESTADOS_CAJA = [
-    { value: '', label: 'Todos' },
-    { value: 'disponible', label: 'Disponible' },
-    { value: 'vendida', label: 'Vendida' },
-    { value: 'devuelta_llena', label: 'Devuelta llena' }
-  ];
-
-  const FORMAS_PAGO = [
-    { value: '', label: 'Todas' },
-    { value: 'EFECTIVO', label: 'Efectivo' },
-    { value: 'YAPE', label: 'Yape' },
-    { value: 'PLIN', label: 'Plin' },
-    { value: 'TRANSFERENCIA', label: 'Transferencia' },
-    { value: 'INTERBANCARIO', label: 'Transferencia interbancaria' }
-  ];
-
-  // Opciones para filtros de ubicación / ventas (punto de venta)
-  const [opcionesZonas, setOpcionesZonas] = useState([]);
-  const [opcionesPuntosVenta, setOpcionesPuntosVenta] = useState([]);
-
-  // Para evitar mostrar miles de registros en pantalla
-  const familiasParaTabla = familias.slice(0, FAMILIAS_MAX_MOSTRAR);
-  const ventasParaTabla = ventasCajas.slice(0, VENTAS_MAX_MOSTRAR);
-
-  // Estado para reportes de servicios
-  const [serviciosPorTipo, setServiciosPorTipo] = useState([]);
-  const [ingresosPorServicio, setIngresosPorServicio] = useState([]);
-  const [estadoServicios, setEstadoServicios] = useState([]);
-
-  // Filtros
-  const [filtros, setFiltros] = useState({
-    cajas: { zona_id: '', estado_caja: '' },
-    ubicacion: { estado: '', punto_venta_id: '', zona_id: '' },
-    ventas: { desde: '', hasta: '', punto_venta_id: '', forma_pago: '' },
-    servicios: { desde: '', hasta: '' }
-  });
-
-  const handleFilterChange = (reportType, key, value) => {
-    setFiltros(prev => ({
-      ...prev,
-      [reportType]: { ...prev[reportType], [key]: value }
-    }));
-  };
-
-  // Cargar reportes de cajas
-  const loadReporteCajas = async () => {
-    try {
-      setLoading(true);
-      const token = localStorage.getItem('token');
-      const headers = { Authorization: `Bearer ${token}` };
-
-      const [familRes, zonRes, ubicRes, ventRes, recRes, estRes, campRes, segRes, tamRes] = await Promise.all([
-        axios.get(`${API_URL}/reportes/cajas/familias`, { headers, params: filtros.cajas }),
-        axios.get(`${API_URL}/reportes/cajas/zonas`, { headers }),
-        axios.get(`${API_URL}/reportes/cajas/ubicacion`, { headers, params: filtros.ubicacion }),
-        axios.get(`${API_URL}/reportes/cajas/ventas`, { headers, params: filtros.ventas }),
-        axios.get(`${API_URL}/reportes/cajas/recaudacion`, { headers, params: filtros.ventas }),
-        axios.get(`${API_URL}/reportes/cajas/estado`, { headers }),
-        axios.get(`${API_URL}/reportes/cajas/campania-resumen`, { headers }),
-        axios.get(`${API_URL}/reportes/cajas/segmentacion-edades`, { headers })
-        // axios.get(`${API_URL}/reportes/cajas/tamaño-familias`, { headers })
-      ]);
-
-      setFamilias(familRes.data.data || []);
-      setZonasData(zonRes.data.data || []);
-      setUbicacionCajas(ubicRes.data.data || []);
-      setVentasCajas(ventRes.data.data || []);
-
-      const recData = recRes.data.data || {};
-      setRecaudacionPV(recData.por_punto_venta || []);
-      setRecaudacionForma(recData.por_forma_pago || []);
-      setDetalleYape(recData.detalle_yape || []);
-      setDetallePlin(recData.detalle_plin || []);
-      setDetalleTransferencia(recData.detalle_transferencia || []);
-      setDetalleInterbancario(recData.detalle_interbancario || []);
-
-      setEstadoCajas(estRes.data.data || []);
-      setCampaniaResumen(campRes.data.data || null);
-      setSegmentacionEdades(segRes.data.data || null);
-      setTamanioFamilias(tamRes.data.data || null);
-    } catch (error) {
-      console.error('Error cargando reportes:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Cargar reportes de servicios
-  const loadReporteServicios = async () => {
-    try {
-      setLoading(true);
-      const token = localStorage.getItem('token');
-      const headers = { Authorization: `Bearer ${token}` };
-
-      const [tipoRes, ingRes, estRes] = await Promise.all([
-        axios.get(`${API_URL}/reportes/servicios/por-tipo`, { headers, params: filtros.servicios }),
-        axios.get(`${API_URL}/reportes/servicios/ingresos`, { headers, params: filtros.servicios }),
-        axios.get(`${API_URL}/reportes/servicios/estado`, { headers })
-      ]);
-
-      setServiciosPorTipo(tipoRes.data.data || []);
-      setIngresosPorServicio(ingRes.data.data || []);
-      setEstadoServicios(estRes.data.data || []);
-    } catch (error) {
-      console.error('Error cargando reportes:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'cajas') {
-      loadReporteCajas();
-    } else {
-      loadReporteServicios();
-    }
-  }, [activeTab]);
-
-  // Construir opciones de zonas a partir del reporte de zonas
-  useEffect(() => {
-    if (zonasData && zonasData.length > 0) {
-      const opciones = zonasData
-        .filter(z => z.id != null)
-        .map(z => ({
-          value: String(z.id),
-          label: z.nombre || `Zona ${z.id}`
-        }));
-      setOpcionesZonas(opciones);
-    } else {
-      setOpcionesZonas([]);
-    }
-  }, [zonasData]);
-
-  // Construir opciones de puntos de venta a partir de ubicación de cajas
-  useEffect(() => {
-    if (ubicacionCajas && ubicacionCajas.length > 0) {
-      const mapa = new Map();
-      ubicacionCajas.forEach(caja => {
-        if (caja.punto_venta_id && caja.punto_venta) {
-          mapa.set(String(caja.punto_venta_id), caja.punto_venta);
-        }
-      });
-
-      const opciones = Array.from(mapa.entries()).map(([value, label]) => ({
-        value,
-        label
-      }));
-
-      setOpcionesPuntosVenta(opciones);
-    } else {
-      setOpcionesPuntosVenta([]);
-    }
-  }, [ubicacionCajas]);
+  const { cards: c, familias } = data;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4 md:p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Reportes</h1>
-          <p className="text-gray-600 dark:text-gray-400">
-            Consulta y exporta reportes del sistema
-          </p>
-        </div>
-
-        {/* Tabs */}
-        <div className="mb-6 flex gap-2 border-b border-gray-200 dark:border-gray-700">
-          <button
-            onClick={() => setActiveTab('cajas')}
-            className={`px-4 py-2 font-medium transition-colors duration-200 ${
-              activeTab === 'cajas'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-            }`}
-          >
-            📦 Cajas del Amor
-          </button>
-          <button
-            onClick={() => setActiveTab('servicios')}
-            className={`px-4 py-2 font-medium transition-colors duration-200 ${
-              activeTab === 'servicios'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-            }`}
-          >
-            ⛪ Servicios Parroquiales
-          </button>
-        </div>
-
-        {activeTab === 'cajas' && (
-          <div className="space-y-6">
-
-            {/* Filtros específicos para "Listado de Familias Beneficiadas" */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                Filtros - Familias Beneficiadas
-              </h2>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                {/* Filtro por Zona */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Zona
-                  </label>
-                  <select
-                    value={filtros.cajas.zona_id}
-                    onChange={(e) => handleFilterChange('cajas', 'zona_id', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Todas las zonas</option>
-                    {zonasData.map((z) => (
-                      <option key={z.id} value={z.id}>
-                        {z.nombre}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Filtro por Estado de caja */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Estado de caja
-                  </label>
-                  <select
-                    value={filtros.cajas.estado_caja}
-                    onChange={(e) => handleFilterChange('cajas', 'estado_caja', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Todos los estados</option>
-                    <option value="disponible">Disponible</option>
-                    <option value="asignada">Asignada</option>
-                    <option value="entregada">Entregada</option>
-                    <option value="devuelta">Devuelta</option>
-                  </select>
-                </div>
-
-                {/* Botón aplicar filtros */}
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    onClick={loadReporteCajas}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-                  >
-                    Aplicar filtros
-                  </button>
-                </div>
-              </div>
-
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Mostrando <span className="font-semibold">{familiasParaTabla.length}</span> de{' '}
-                <span className="font-semibold">{familias.length}</span> familias.  
-                Para ver el listado completo utiliza la exportación a Excel.
-              </p>
-            </div>
-
-            {/* Tabla de familias usando sólo las primeras N filas */}
-            <ReportTable
-              title="Listado de Familias Beneficiadas"
-              data={familiasParaTabla}
-              columns={['codigo', 'nombre_responsable', 'direccion', 'zona', 'integrantes', 'caja_monto']}
-              onExport={() => exportToExcel(familias, 'familias-beneficiadas', 'Familias')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Zonas Beneficiadas"
-              data={zonasData}
-              columns={['nombre', 'familias', 'cajas', 'cajas_vendidas', 'cajas_disponibles']}
-              onExport={() => exportToExcel(zonasData, 'zonas-beneficiadas', 'Zonas')}
-              loading={loading}
-            />
-
-            {/* Filtros específicos para Ubicación de Cajas */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-2">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Filtros - Ubicación de Cajas
-              </h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                {/* Estado de caja */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Estado de caja
-                  </label>
-                  <select
-                    value={filtros.ubicacion.estado}
-                    onChange={(e) =>
-                      handleFilterChange('ubicacion', 'estado', e.target.value)
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {ESTADOS_CAJA.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Punto de venta */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Punto de venta
-                  </label>
-                  <select
-                    value={filtros.ubicacion.punto_venta_id}
-                    onChange={(e) =>
-                      handleFilterChange('ubicacion', 'punto_venta_id', e.target.value)
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Todos</option>
-                    {opcionesPuntosVenta.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Zona */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Zona
-                  </label>
-                  <select
-                    value={filtros.ubicacion.zona_id}
-                    onChange={(e) =>
-                      handleFilterChange('ubicacion', 'zona_id', e.target.value)
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Todas</option>
-                    {opcionesZonas.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={loadReporteCajas}
-                  disabled={loading}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-lg transition-colors duración-200"
-                >
-                  {loading ? 'Cargando...' : 'Aplicar filtros'}
-                </button>
-              </div>
-            </div>
-
-            {/* Tabla Ubicación de Cajas limitada */}
-            <ReportTable
-              title="Ubicación de Cajas"
-              data={ubicacionCajas.slice(0, CAJAS_MAX_MOSTRAR)}
-              columns={['codigo', 'monto', 'estado', 'punto_venta', 'nombre_responsable', 'zona']}
-              onExport={() => exportToExcel(ubicacionCajas, 'ubicacion-cajas', 'Ubicación')}
-              loading={loading}
-            />
-
-            {/* Filtros específicos para Venta de Cajas */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-2">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Filtros - Venta de Cajas
-              </h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                {/* Desde */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Desde
-                  </label>
-                  <input
-                    type="date"
-                    value={filtros.ventas.desde}
-                    onChange={(e) => handleFilterChange('ventas', 'desde', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                {/* Hasta */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Hasta
-                  </label>
-                  <input
-                    type="date"
-                    value={filtros.ventas.hasta}
-                    onChange={(e) => handleFilterChange('ventas', 'hasta', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                {/* Punto de venta */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Punto de venta
-                  </label>
-                  <select
-                    value={filtros.ventas.punto_venta_id}
-                    onChange={(e) => handleFilterChange('ventas', 'punto_venta_id', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Todos</option>
-                    {opcionesPuntosVenta.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Forma de pago */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Forma de pago
-                  </label>
-                  <select
-                    value={filtros.ventas.forma_pago}
-                    onChange={(e) => handleFilterChange('ventas', 'forma_pago', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {FORMAS_PAGO.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={loadReporteCajas}
-                  disabled={loading}
-                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-                >
-                  {loading ? 'Cargando...' : 'Aplicar filtros'}
-                </button>
-              </div>
-
-              <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                Mostrando <span className="font-semibold">{ventasParaTabla.length}</span> de{' '}
-                <span className="font-semibold">{ventasCajas.length}</span> ventas.  
-                Para ver el listado completo utiliza la exportación a Excel.
-              </p>
-            </div>
-
-            {/* Tabla Venta de Cajas limitada */}
-            <ReportTable
-              title="Venta de Cajas"
-              data={ventasParaTabla}
-              columns={['numero_comprobante', 'fecha_venta', 'punto_venta', 'benefactor', 'cantidad_cajas', 'cajas_40', 'cajas_160', 'monto_total', 'forma_pago']}
-              onExport={() => exportToExcel(ventasCajas, 'ventas-cajas', 'Ventas')}
-              loading={loading}
-            />
-
-            {/* Recaudación por Punto de Venta */}
-            <ReportTable
-              title="Recaudación por Punto de Venta"
-              data={recaudacionPV}
-              columns={['nombre', 'cantidad_ventas', 'total_recaudado']}
-              onExport={() => exportToExcel(recaudacionPV, 'recaudacion-pv', 'Recaudación PV')}
-              loading={loading}
-            />
-
-            {/* Recaudación por Forma de Pago */}
-            <ReportTable
-              title="Recaudación por Forma de Pago"
-              data={recaudacionForma}
-              columns={['forma_pago', 'cantidad_ventas', 'monto']}
-              onExport={() => exportToExcel(recaudacionForma, 'recaudacion-forma-pago', 'Formas de Pago')}
-              loading={loading}
-            />
-
-            {/* Detalle de Operaciones por Forma de Pago */}
-            <ReportTable
-              title="Detalle Yape"
-              data={detalleYape}
-              columns={['punto_venta', 'fecha_operacion', 'hora_operacion', 'numero_operacion', 'monto']}
-              onExport={() => exportToExcel(detalleYape, 'detalle-yape', 'Yape')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Detalle Plin"
-              data={detallePlin}
-              columns={['punto_venta', 'fecha_operacion', 'hora_operacion', 'numero_operacion', 'monto']}
-              onExport={() => exportToExcel(detallePlin, 'detalle-plin', 'Plin')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Detalle Transferencia"
-              data={detalleTransferencia}
-              columns={['punto_venta', 'fecha_operacion', 'hora_operacion', 'numero_operacion', 'monto']}
-              onExport={() => exportToExcel(detalleTransferencia, 'detalle-transferencia', 'Transferencia')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Detalle Transferencia Interbancaria"
-              data={detalleInterbancario}
-              columns={['punto_venta', 'fecha_operacion', 'hora_operacion', 'numero_operacion', 'monto']}
-              onExport={() => exportToExcel(detalleInterbancario, 'detalle-interbancaria', 'Interbancario')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Estado de Cajas"
-              data={estadoCajas}
-              columns={['estado', 'cantidad', 'cajas_40', 'cajas_160', 'monto_total']}
-              onExport={() => exportToExcel(estadoCajas, 'estado-cajas', 'Estado')}
-              loading={loading}
-            />
-
-            {campaniaResumen && (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                  Información de Campaña
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Total Recaudado</p>
-                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                      S/ {campaniaResumen.total_recaudado.toLocaleString('es-PE')}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Cajas Vendidas</p>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                      {campaniaResumen.cajas_vendidas}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Porcentaje Avance</p>
-                    <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                      {campaniaResumen.porcentaje_avance}%
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {segmentacionEdades && (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                  Segmentación por Edades (Total / Vendidas / No vendidas)
-                </h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Niños 0-4 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niños 0-4
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninos_0_4_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninos_0_4_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninos_0_4_no_vendidas || 0}
-                    </p>
-                  </div>
-
-                  {/* Niñas 0-4 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niñas 0-4
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninas_0_4_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninas_0_4_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninas_0_4_no_vendidas || 0}
-                    </p>
-                  </div>
-
-                  {/* Niños 5-10 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niños 5-10
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninos_5_10_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninos_5_10_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninos_5_10_no_vendidas || 0}
-                    </p>
-                  </div>
-
-                  {/* Niñas 5-10 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niñas 5-10
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninas_5_10_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninas_5_10_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninas_5_10_no_vendidas || 0}
-                    </p>
-                  </div>
-
-                  {/* Niños 11-13 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niños 11-13
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninos_11_13_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninos_11_13_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninos_11_13_no_vendidas || 0}
-                    </p>
-                  </div>
-
-                  {/* Niñas 11-13 */}
-                  <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
-                      Niñas 11-13
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      {segmentacionEdades.ninas_11_13_total || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Vendidas: {segmentacionEdades.ninas_11_13_vendidas || 0}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      No vendidas: {segmentacionEdades.ninas_11_13_no_vendidas || 0}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {tamanioFamilias && (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                  Tamaño de Familias
-                </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Hasta 5 - Vendidas</p>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                      {tamanioFamilias.hasta_5_vendidas || 0}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Hasta 5 - No vendidas</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                      {tamanioFamilias.hasta_5_no_vendidas || 0}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Más de 5 - Vendidas</p>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                      {tamanioFamilias.mas_5_vendidas || 0}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg text-center">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Más de 5 - No vendidas</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                      {tamanioFamilias.mas_5_no_vendidas || 0}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Reportes Servicios */}
-        {activeTab === 'servicios' && (
-          <div className="space-y-6">
-            <ReportTable
-              title="Servicios por Tipo"
-              data={serviciosPorTipo}
-              columns={['nombre', 'cantidad', 'monto_recaudado']}
-              onExport={() => exportToExcel(serviciosPorTipo, 'servicios-por-tipo', 'Servicios')}
-              filters={filtros.servicios}
-              onFilterChange={(key, value) => handleFilterChange('servicios', key, value)}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Ingresos por Servicio"
-              data={ingresosPorServicio}
-              columns={['nombre', 'cantidad_servicios', 'total_ingresos', 'promedio_ingreso']}
-              onExport={() => exportToExcel(ingresosPorServicio, 'ingresos-servicios', 'Ingresos')}
-              loading={loading}
-            />
-
-            <ReportTable
-              title="Estado de Servicios"
-              data={estadoServicios}
-              columns={['estado', 'cantidad']}
-              onExport={() => exportToExcel(estadoServicios, 'estado-servicios', 'Estado')}
-              loading={loading}
-            />
-          </div>
-        )}
+    <div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
+        <Card label="Familias beneficiadas" value={c.total_familias} sub={`${c.total_personas} personas`} color="blue" />
+        <Card label="Familias asignadas" value={c.familias_asignadas} sub={`de ${c.total_familias}`} color="green" />
+        <Card label="Cajas vendidas" value={c.cajas_vendidas} sub={`${c.pct_vendidas}% de ${c.total_cajas}`} color="purple" />
+        <Card label="Cajas devueltas" value={c.cajas_devueltas} sub={`${c.pct_devueltas}% de vendidas`} color="yellow" />
+        <Card label="Dinero ingresado" value={fmtMoney(c.dinero_ingresado)} color="green" />
       </div>
+
+      {/* Barras */}
+      <div className="mb-6 space-y-3">
+        {[{label:'Avance ventas',pct:c.pct_vendidas,clr:'bg-purple-600'},{label:'Devoluciones',pct:c.pct_devueltas,clr:'bg-yellow-500'}].map(b => (
+          <div key={b.label}>
+            <div className="flex justify-between text-sm mb-1"><span className="text-gray-600 dark:text-gray-400">{b.label}</span><span className="font-medium dark:text-white">{b.pct}%</span></div>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3"><div className={`${b.clr} h-3 rounded-full`} style={{width:`${Math.min(b.pct,100)}%`}} /></div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabla familias */}
+      <div className="flex justify-between items-center mb-2">
+        <h3 className="text-sm font-semibold dark:text-white">Detalle por familia</h3>
+        <ExportBtn onClick={() => exportXlsx(familias.map(r => ({
+          Código: r.codigo, Titular: r.titular, Zona: r.zona, Integrantes: r.integrantes,
+          'Estado Caja': r.estado_texto, Benefactor: r.benefactor || '',
+        })), 'Reporte_General_Familias')} disabled={!familias.length} />
+      </div>
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>{['Código','Titular','Zona','Integrantes','Estado Caja','Benefactor'].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y dark:divide-gray-600">
+            {familias.map((r, i) => <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+              <td className="px-3 py-2 font-medium dark:text-white">{r.codigo}</td>
+              <td className="px-3 py-2 dark:text-white">{r.titular || '—'}</td>
+              <td className="px-3 py-2 dark:text-white">{r.zona || '—'}</td>
+              <td className="px-3 py-2 text-center dark:text-white">{r.integrantes}</td>
+              <td className="px-3 py-2 dark:text-white">{r.estado_texto}</td>
+              <td className="px-3 py-2 dark:text-white">{r.benefactor || '—'}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-gray-500 mt-2">{familias.length} familia(s)</div>
+    </div>
+  );
+};
+
+// ═══════════════════ 4. SERVICIOS PARROQUIALES ═══════════════════
+const ServiciosReporte = () => {
+  const [rows, setRows] = useState([]);
+  const [tipos, setTipos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fTipo, setFTipo] = useState('');
+  const [fEstado, setFEstado] = useState('');
+  const [fDesde, setFDesde] = useState('');
+  const [fHasta, setFHasta] = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (fTipo) p.set('tipo_servicio_id', fTipo);
+    if (fEstado) p.set('estado', fEstado);
+    if (fDesde) p.set('desde', fDesde);
+    if (fHasta) p.set('hasta', fHasta);
+    const r = await get(`/reportes/servicios?${p}`);
+    if (r.success) { setRows(r.data); if (r.tipos) setTipos(r.tipos); }
+    setLoading(false);
+  }, [fTipo, fEstado, fDesde, fHasta]);
+
+  useEffect(() => { fetchData(); }, []);
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-3 mb-4 items-end">
+        <div><label className="block text-xs text-gray-500 mb-1">Tipo servicio</label>
+          <select value={fTipo} onChange={e => setFTipo(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todos</option>{tipos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+          </select>
+        </div>
+        <div><label className="block text-xs text-gray-500 mb-1">Estado</label>
+          <select value={fEstado} onChange={e => setFEstado(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todos</option><option value="programado">Programado</option><option value="realizado">Realizado</option><option value="cancelado">Cancelado</option>
+          </select>
+        </div>
+        <div><label className="block text-xs text-gray-500 mb-1">Desde</label><input type="date" value={fDesde} onChange={e => setFDesde(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" /></div>
+        <div><label className="block text-xs text-gray-500 mb-1">Hasta</label><input type="date" value={fHasta} onChange={e => setFHasta(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" /></div>
+        <button onClick={fetchData} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Filtrar</button>
+        <button onClick={() => { setFTipo(''); setFEstado(''); setFDesde(''); setFHasta(''); setTimeout(fetchData, 50); }} className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
+        <div className="flex-1" />
+        <ExportBtn onClick={() => exportXlsx(rows.map(r => ({
+          ID: r.id, 'Tipo Servicio': r.tipo_servicio || '', Fecha: fmtDate(r.fecha_servicio), Hora: r.hora_servicio || '',
+          Descripción: r.descripcion || '', Precio: r.precio, Estado: r.estado,
+          Cliente: r.cliente_nombre || '', Teléfono: r.cliente_telefono || '', Observaciones: r.observaciones || '',
+        })), 'Servicios_Parroquiales')} disabled={!rows.length} />
+      </div>
+      <div className="text-xs text-gray-500 mb-2">{rows.length} servicio(s) | Total: {fmtMoney(rows.reduce((s, r) => s + Number(r.precio || 0), 0))}</div>
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>{['#','Tipo Servicio','Fecha','Hora','Descripción','Precio','Estado','Cliente','Teléfono','Observaciones'].map(h =>
+              <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y dark:divide-gray-600">
+            {loading && <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {!loading && rows.map(r => (
+              <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <td className="px-3 py-2 dark:text-white">{r.id}</td>
+                <td className="px-3 py-2 dark:text-white">{r.tipo_servicio || '—'}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_servicio)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.hora_servicio || '—'}</td>
+                <td className="px-3 py-2 dark:text-white max-w-xs truncate">{r.descripcion || '—'}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtMoney(r.precio)}</td>
+                <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${
+                  r.estado==='realizado'?'bg-green-100 text-green-800':r.estado==='cancelado'?'bg-red-100 text-red-800':'bg-yellow-100 text-yellow-800'}`}>{r.estado}</span></td>
+                <td className="px-3 py-2 dark:text-white">{r.cliente_nombre || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.cliente_telefono || '—'}</td>
+                <td className="px-3 py-2 dark:text-white max-w-xs truncate">{r.observaciones || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════ 5. COBROS / INGRESOS ═══════════════════
+const CobrosReporte = () => {
+  const [rows, setRows] = useState([]);
+  const [metodos, setMetodos] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [fDesde, setFDesde] = useState('');
+  const [fHasta, setFHasta] = useState('');
+  const [fMetodo, setFMetodo] = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (fDesde) p.set('desde', fDesde);
+    if (fHasta) p.set('hasta', fHasta);
+    if (fMetodo) p.set('metodo_pago_id', fMetodo);
+    const r = await get(`/reportes/cobros?${p}`);
+    if (r.success) { setRows(r.data); setTotal(r.total || 0); if (r.metodos) setMetodos(r.metodos); }
+    setLoading(false);
+  }, [fDesde, fHasta, fMetodo]);
+
+  useEffect(() => { fetchData(); }, []);
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-3 mb-4 items-end">
+        <div><label className="block text-xs text-gray-500 mb-1">Desde</label><input type="date" value={fDesde} onChange={e => setFDesde(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" /></div>
+        <div><label className="block text-xs text-gray-500 mb-1">Hasta</label><input type="date" value={fHasta} onChange={e => setFHasta(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" /></div>
+        <div><label className="block text-xs text-gray-500 mb-1">Método pago</label>
+          <select value={fMetodo} onChange={e => setFMetodo(e.target.value)} className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todos</option>{metodos.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+          </select>
+        </div>
+        <button onClick={fetchData} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Filtrar</button>
+        <button onClick={() => { setFDesde(''); setFHasta(''); setFMetodo(''); setTimeout(fetchData, 50); }} className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
+        <div className="flex-1" />
+        <ExportBtn onClick={() => exportXlsx(rows.map(r => ({
+          ID: r.id, Concepto: r.concepto || r.servicio_nombre_temp || '', Monto: r.monto,
+          'Fecha Cobro': fmtDate(r.fecha_cobro), 'Nro. Comprobante': r.numero_comprobante || '',
+          'Método Pago': r.metodo_pago || '', 'Tipo Servicio': r.tipo_servicio || '',
+          'Fecha Servicio': fmtDate(r.fecha_servicio), 'Hora Servicio': r.hora_servicio || '',
+          'Desc. Servicio': r.descripcion_servicio || '', Cliente: r.cliente_nombre || '',
+          Teléfono: r.cliente_telefono || '', Observaciones: r.observaciones || '',
+        })), 'Ingresos_Cobros')} disabled={!rows.length} />
+      </div>
+      <div className="text-xs text-gray-500 mb-2">{rows.length} cobro(s) | Total: <span className="font-semibold text-green-700">{fmtMoney(total)}</span></div>
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>{['#','Concepto','Monto','Fecha','Comprobante','Método Pago','Tipo Servicio','Fec. Servicio','Hora','Cliente','Teléfono','Observaciones'].map(h =>
+              <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y dark:divide-gray-600">
+            {loading && <tr><td colSpan={12} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={12} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {!loading && rows.map(r => (
+              <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <td className="px-3 py-2 dark:text-white">{r.id}</td>
+                <td className="px-3 py-2 dark:text-white">{r.concepto || r.servicio_nombre_temp || '—'}</td>
+                <td className="px-3 py-2 dark:text-white font-medium whitespace-nowrap">{fmtMoney(r.monto)}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_cobro)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.numero_comprobante || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.metodo_pago || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.tipo_servicio || '—'}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_servicio)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.hora_servicio || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.cliente_nombre || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.cliente_telefono || '—'}</td>
+                <td className="px-3 py-2 dark:text-white max-w-xs truncate">{r.observaciones || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════ MAIN COMPONENT ═══════════════════
+export default function Reportes() {
+  const [mainTab, setMainTab] = useState('cajas');
+  const [cajasTab, setCajasTab] = useState('seguimiento');
+  const [serviciosTab, setServiciosTab] = useState('servicios');
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Reportes</h1>
+        <p className="text-gray-600 dark:text-gray-400">Reportes y estadísticas del sistema.</p>
+      </div>
+
+      {/* Main tabs */}
+      <div className="flex border-b border-gray-300 dark:border-gray-600 mb-5">
+        {[{ id: 'cajas', label: '📦 Cajas del Amor' }, { id: 'servicios', label: '⛪ Servicios Parroquiales' }].map(t => (
+          <button key={t.id} onClick={() => setMainTab(t.id)}
+            className={`px-6 py-3 text-sm font-semibold border-b-3 transition-colors ${
+              mainTab === t.id ? 'border-b-2 border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ═══ CAJAS DEL AMOR ═══ */}
+      {mainTab === 'cajas' && (
+        <div>
+          <SubTabs
+            tabs={[{ id: 'seguimiento', label: 'Seguimiento de Cajas' }, { id: 'beneficiados', label: 'Info. Beneficiados' }, { id: 'general', label: 'Reporte General' }]}
+            active={cajasTab} onChange={setCajasTab} />
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-5">
+            {cajasTab === 'seguimiento' && <SeguimientoCajas />}
+            {cajasTab === 'beneficiados' && <Beneficiados />}
+            {cajasTab === 'general' && <ReporteGeneral />}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ SERVICIOS PARROQUIALES ═══ */}
+      {mainTab === 'servicios' && (
+        <div>
+          <SubTabs
+            tabs={[{ id: 'servicios', label: 'Servicios Comprometidos' }, { id: 'cobros', label: 'Ingresos / Cobros' }]}
+            active={serviciosTab} onChange={setServiciosTab} />
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-5">
+            {serviciosTab === 'servicios' && <ServiciosReporte />}
+            {serviciosTab === 'cobros' && <CobrosReporte />}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

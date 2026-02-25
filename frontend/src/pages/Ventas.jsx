@@ -4,6 +4,42 @@ import { useAuth } from "../contexts/AuthContext";
 import ExcelJS from "exceljs";
 import { ventasService, catalogosService } from "../services/api";
 
+// Mapeo: enum BD → nombre amigable
+const mapEstadoDB = (dbVal) => {
+  const MAP = {
+    'entregada': 'Entregada a Benefactor',
+    'devuelta': 'Devuelta por Benefactor',
+    'entregada_familia': 'Entregada a Familia',
+    'asignada': 'Asignada',
+    'disponible': 'Disponible',
+  };
+  return MAP[String(dbVal).toLowerCase()] || dbVal || 'Entregada a Benefactor';
+};
+
+// Extender ventasService con los nuevos endpoints (sin modificar api.js)
+if (ventasService) {
+  if (!ventasService.getCajasVenta) {
+    ventasService.getCajasVenta = async (ventaId) => {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/ventas/${ventaId}/cajas`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      return res.json();
+    };
+  }
+  if (!ventasService.actualizarEstadoCaja) {
+    ventasService.actualizarEstadoCaja = async (cajaId, estado) => {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/ventas/cajas/${cajaId}/estado`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ estado })
+      });
+      return res.json();
+    };
+  }
+}
+
 // Normaliza cualquier fecha (Date/ISO/string) a yyyy-MM-dd
 const toYMD = (v) => {
   if (!v) return "";
@@ -79,9 +115,9 @@ export default function Ventas() {
   // benefactor (solo S/40 al crear)
   const [bf, setBf] = useState({ nombres: "", apellidos: "", telefono: "", correo: "" });
 
-  // cajas (solo S/40 al crear)
+  // cajas
   const [codigo, setCodigo] = useState("");
-  const [items, setItems] = useState([]); // [{codigo, ok, error?}]
+  const [items, setItems] = useState([]); // [{codigo, ok, error?, cajaId?, estado}]
 
   const [msg, setMsg] = useState({ type: "", text: "" });
 
@@ -293,7 +329,7 @@ export default function Ventas() {
     setShowModal(true);
   };
 
-  const openEditModal = (r) => {
+  const openEditModal = async (r) => {
     setMode("edit");
     setEditId(r.id);
     setMsg({ type: "", text: "" });
@@ -307,11 +343,32 @@ export default function Ventas() {
     setObsVenta(r.observaciones || "");
     setEstadoVenta(r.estado || "Entregada a Benefactor");
 
-    // edición: no tocamos benefactor ni códigos ni pagos
-    setBf({ nombres: "", apellidos: "", telefono: "", correo: "" });
-    setItems([]);
-    setPropagarEstado(false);
+    // Cargar benefactor (read-only en edit)
+    setBf({
+      nombres: r.benefactor_nombre?.split(' ').slice(0, -1).join(' ') || r.benefactor_nombre || "",
+      apellidos: "",
+      telefono: r.benefactor_telefono || "",
+      correo: r.benefactor_email || "",
+    });
 
+    // Cargar cajas vinculadas a esta venta
+    try {
+      const resp = await ventasService.getCajasVenta(r.id);
+      if (resp?.success && resp.data?.length) {
+        setItems(resp.data.map(c => ({
+          codigo: c.codigo,
+          ok: true,
+          cajaId: c.id,
+          estado: mapEstadoDB(c.estado),
+        })));
+      } else {
+        setItems([]);
+      }
+    } catch {
+      setItems([]);
+    }
+
+    setPropagarEstado(false);
     setShowModal(true);
   };
 
@@ -324,7 +381,7 @@ export default function Ventas() {
 
     const resp = await ventasService.buscarCaja(cod);
     if (resp?.success) {
-      setItems((prev) => [...prev, { codigo: cod, ok: true }]);
+      setItems((prev) => [...prev, { codigo: cod, ok: true, estado: "Entregada a Benefactor" }]);
     } else {
       setItems((prev) => [...prev, { codigo: cod, ok: false, error: resp?.error || "No válida" }]);
     }
@@ -457,13 +514,16 @@ export default function Ventas() {
         punto_venta_id: puntoVentaId,
         forma_pago: formaPago || null,
         estado: estadoVenta || "Entregada a Benefactor",
-        monto: Number(monto || 0),     // monto "de referencia": costo de la(s) caja(s)
+        monto: Number(monto || 0),
         moneda: "PEN",
         benefactor: is40 ? bf : null,
         codigos: is40 ? codigos : [],
+        cajas_estados: is40 ? Object.fromEntries(
+          items.filter(i => i.ok).map(i => [i.codigo, i.estado || "Entregada a Benefactor"])
+        ) : {},
         fecha_devolucion: is40 ? devolucion : null,
         obs: obsVenta?.slice(0, 62) || null,
-        pagos: pagosPayload,           // 👈 AQUÍ mandamos los pagos múltiples
+        pagos: pagosPayload,
       };
 
       try {
@@ -509,7 +569,7 @@ export default function Ventas() {
       
 
     } else {
-      // EDIT (esta parte la puedes dejar como ya la tienes)
+      // EDIT
       const payload = {
         fecha,
         modalidad_id: modalidadId,
@@ -518,7 +578,6 @@ export default function Ventas() {
         estado: estadoVenta || null,
         fecha_devolucion: devolucion || null,
         observaciones: obsVenta?.slice(0, 62) || null,
-        propagar_estado_cajas: !!propagarEstado,
       };
 
       const resp = await ventasService.update(editId, payload);
@@ -803,39 +862,6 @@ export default function Ventas() {
                 />
               </div>
 
-              <div>
-                <label className="text-sm block mb-1">Estado</label>
-                <select
-                  className="w-full border rounded px-2 py-1"
-                  value={estadoVenta}
-                  onChange={(e) => setEstadoVenta(e.target.value)}
-                  disabled={mode === "create" && is160}   // 👈 sigue bloqueando S/160 al crear
-                  title={mode === "create" && is160
-                    ? "Estado fijado en 'Asignada' para modalidad S/160"
-                    : undefined}
-                >
-                  {/* Entregada a benefactor (venta S/40 normal) */}
-                  <option value="Entregada a Benefactor">
-                    Entregada a Benefactor
-                  </option>
-
-                  {/* Devuelta por benefactor (seguimos usando 'Devuelta' internamente) */}
-                  <option value="Devuelta">
-                    Devuelta por Benefactor
-                  </option>
-
-                  {/* Nuevo estado: Entregada a familia */}
-                  <option value="Entregada a Familia">
-                    Entregada a Familia
-                  </option>
-
-                  {/* Asignada (cajas de S/160, sin caja física) */}
-                  <option value="Asignada">
-                    Asignada (caja S/160)
-                  </option>
-                </select>
-              </div>
-
 
               <div>
                 <label className="text-sm block mb-1">Modalidad</label>
@@ -1037,24 +1063,9 @@ export default function Ventas() {
                   onChange={(e) => setObsVenta(e.target.value)}
                 />
               </div>
-
-              {mode === "edit" && (
-                <div className="md:col-span-3 flex items-center gap-2">
-                  <input
-                    id="propagar"
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={propagarEstado}
-                    onChange={(e) => setPropagarEstado(e.target.checked)}
-                  />
-                  <label htmlFor="propagar" className="text-sm">
-                    Propagar estado a cajas vinculadas
-                  </label>
-                </div>
-              )}
             </div>
 
-            {/* Benefactor + Códigos (solo create + S/40) */}
+            {/* Benefactor (solo create + S/40) */}
             {mode === "create" && (
               <>
 
@@ -1105,67 +1116,99 @@ export default function Ventas() {
                     Modalidad S/160: no se asignan cajas ni se capturan datos de benefactor.
                   </div>
                 )}
+              </>
+            )}
 
-                {is40 && (
-                  <div className="mt-4">
-                    <div className="flex items-end gap-2 mb-2">
-                      <div className="flex-1">
-                        <label className="text-sm block mb-1">Código de caja</label>
-                        <input
-                          className="w-full border rounded px-2 py-1"
-                          value={codigo}
-                          onChange={(e) => setCodigo(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && addCodigo()}
-                        />
-                      </div>
-                      <button onClick={addCodigo} className="px-3 py-2 rounded bg-indigo-600 text-white">
-                        Agregar
-                      </button>
-                    </div>
+            {/* Benefactor read-only en edit */}
+            {mode === "edit" && is40 && bf.nombres && (
+              <div className="mt-4 p-3 rounded border bg-gray-50 dark:bg-gray-700 text-sm">
+                <span className="font-semibold">Benefactor:</span>{" "}
+                {bf.nombres} {bf.apellidos}
+                {bf.telefono && <> | Tel: {bf.telefono}</>}
+                {bf.correo && <> | {bf.correo}</>}
+              </div>
+            )}
 
-                    <div className="border rounded">
-                      <table className="min-w-full text-sm">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-3 py-2 text-left">Código</th>
-                            <th className="px-3 py-2 text-left">Estado</th>
-                            <th className="px-3 py-2 text-right">Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y">
-                          {items.map((i, idx) => (
-                            <tr key={idx}>
-                              <td className="px-3 py-2">{i.codigo}</td>
-                              <td className="px-3 py-2">
-                                {i.ok ? (
-                                  <span className="text-green-700">OK</span>
-                                ) : (
-                                  <span className="text-red-700">{i.error || "No válida"}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                <button
-                                  onClick={() => removeItem(idx)}
-                                  className="text-red-600 hover:underline"
-                                >
-                                  Quitar
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                          {items.length === 0 && (
-                            <tr>
-                              <td colSpan={3} className="px-3 py-4 text-center text-gray-500">
-                                Sin cajas agregadas
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+            {/* === CAJAS: visible en CREATE y EDIT para S/40 === */}
+            {is40 && (
+              <div className="mt-4">
+                {/* Input para agregar cajas (solo create) */}
+                {mode === "create" && (
+                  <div className="flex items-end gap-2 mb-2">
+                    <div className="flex-1">
+                      <label className="text-sm block mb-1">Código de caja</label>
+                      <input
+                        className="w-full border rounded px-2 py-1"
+                        value={codigo}
+                        onChange={(e) => setCodigo(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && addCodigo()}
+                      />
                     </div>
+                    <button onClick={addCodigo} className="px-3 py-2 rounded bg-indigo-600 text-white">
+                      Agregar
+                    </button>
                   </div>
                 )}
-              </>
+
+                <div className="border rounded">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Código</th>
+                        <th className="px-3 py-2 text-left">Estado de caja</th>
+                        {mode === "create" && <th className="px-3 py-2 text-right">Acciones</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {items.map((i, idx) => (
+                        <tr key={idx}>
+                          <td className="px-3 py-2 font-medium">{i.codigo}</td>
+                          <td className="px-3 py-2">
+                            {i.ok === false ? (
+                              <span className="text-red-700">{i.error || "No válida"}</span>
+                            ) : (
+                              <select
+                                className="border rounded px-2 py-1 text-sm"
+                                value={i.estado || "Entregada a Benefactor"}
+                                onChange={(e) => {
+                                  const newItems = [...items];
+                                  newItems[idx] = { ...newItems[idx], estado: e.target.value };
+                                  setItems(newItems);
+                                  // En edit: actualizar directo en BD
+                                  if (mode === "edit" && i.cajaId) {
+                                    ventasService.actualizarEstadoCaja(i.cajaId, e.target.value);
+                                  }
+                                }}
+                              >
+                                <option value="Entregada a Benefactor">Entregada a Benefactor</option>
+                                <option value="Devuelta por Benefactor">Devuelta por Benefactor</option>
+                                <option value="Entregada a Familia">Entregada a Familia</option>
+                              </select>
+                            )}
+                          </td>
+                          {mode === "create" && (
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                onClick={() => removeItem(idx)}
+                                className="text-red-600 hover:underline"
+                              >
+                                Quitar
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                      {items.length === 0 && (
+                        <tr>
+                          <td colSpan={mode === "create" ? 3 : 2} className="px-3 py-4 text-center text-gray-500">
+                            Sin cajas
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
 
             <div className="flex justify-end gap-2 mt-6 sticky bottom-0 bg-white dark:bg-gray-800 py-2">

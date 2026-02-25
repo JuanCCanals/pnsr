@@ -489,6 +489,55 @@ const Familias = () => {
   const [rangoDesde, setRangoDesde] = useState('');
   const [rangoHasta, setRangoHasta] = useState('');
 
+  // Tabs: Familias / Cajas
+  const [activeTab, setActiveTab] = useState('familias');
+  const [cajasRows, setCajasRows] = useState([]);
+  const [cajasLoading, setCajasLoading] = useState(false);
+  const [cajasSearch, setCajasSearch] = useState('');
+  const [cajasEstadoFilter, setCajasEstadoFilter] = useState('');
+  const [cajasPage, setCajasPage] = useState(1);
+  const [cajasPagination, setCajasPagination] = useState({ total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+
+  const ESTADOS_CAJA = [
+    { value: 'disponible', label: 'Disponible' },
+    { value: 'asignada', label: 'Asignada' },
+    { value: 'entregada', label: 'Entregada a Benefactor' },
+    { value: 'devuelta', label: 'Devuelta por Benefactor' },
+    { value: 'entregada_familia', label: 'Entregada a Familia' },
+  ];
+
+  const mapEstadoCaja = (val) => ESTADOS_CAJA.find(e => e.value === val)?.label || val || 'Disponible';
+
+  const fetchCajas = async (goToPage = 1) => {
+    setCajasLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams({
+        page: goToPage,
+        limit: 20,
+        ...(cajasSearch && { search: cajasSearch }),
+        ...(cajasEstadoFilter && { estado: cajasEstadoFilter }),
+        ...(zonaId && { zona_id: zonaId }),
+      });
+      const res = await fetch(`/api/familias/cajas?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCajasRows(data.data || []);
+        setCajasPagination(data.pagination || { total: 0, totalPages: 1, hasPrev: false, hasNext: false });
+        setCajasPage(goToPage);
+      }
+    } catch (err) {
+      console.error('Error cargando cajas:', err);
+    } finally {
+      setCajasLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'cajas') fetchCajas(1);
+  }, [activeTab, cajasSearch, cajasEstadoFilter, zonaId]);
   const handleImprimirRango = async () => {
     // Validar que haya zona seleccionada
     if (!zonaId) {
@@ -1029,24 +1078,14 @@ const Familias = () => {
         <p className="text-gray-600 dark:text-gray-400">Listado, detalle y etiquetas.</p>
       </div>
 
-      {/* Filtros */}
-      <div className="flex flex-col lg:flex-row gap-3 mb-4">
+      {/* Fila 1: Búsqueda + filtros + botones de acción */}
+      <div className="flex flex-wrap gap-3 mb-3 items-center">
         <input
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           placeholder="Buscar (código, nombres, dirección)..."
-          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white w-64"
         />
-        <select
-          value={zonaId}
-          onChange={(e) => { setZonaId(e.target.value); setPage(1); }}
-          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
-        >
-          <option value="">Todas las zonas</option>
-          {zonas.map((z) => (
-            <option key={z.id} value={z.id}>{z.nombre}</option>
-          ))}
-        </select>
         <select
           value={activo}
           onChange={(e) => { setActivo(e.target.value); setPage(1); }}
@@ -1059,85 +1098,107 @@ const Familias = () => {
 
         <div className="flex-1" />
 
-          <div className="flex gap-2">
-            {/* PRE IMPORTACIÓN */}
-            {canCreate && <button
-              type="button"
-              onClick={() => setShowImportModal(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-            >
-              PRE IMPORTACIÓN
-            </button>}
+        {canCreate && <button
+          type="button"
+          onClick={() => setShowImportModal(true)}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+        >
+          PRE IMPORTACIÓN
+        </button>}
+        {canCreate && <button
+          type="button"
+          onClick={() => setShowImportModal(true)}
+          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+        >
+          Importar Excel
+        </button>}
+        <button
+          className="px-3 py-2 rounded bg-emerald-600 text-white"
+          onClick={handleExportXlsxAll}
+        >
+          Exportar Excel
+        </button>
+      </div>
 
-            {/* Importar Excel (abre el mismo modal) */}
-            {canCreate && <button
-              type="button"
-              onClick={() => setShowImportModal(true)}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-            >
-              Importar Excel
-            </button>}
+      {/* Fila 2: Rango + Zona + Impresión etiquetas */}
+      <div className="flex flex-wrap gap-3 mb-4 items-center">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Rango:</span>
+        <input
+          type="text"
+          placeholder="Desde: CTE014"
+          value={rangoDesde}
+          onChange={(e) => setRangoDesde(e.target.value.toUpperCase())}
+          className="w-32 px-2 py-1.5 text-sm border rounded-md dark:bg-gray-700 dark:text-white"
+          disabled={!zonaId}
+        />
+        <span className="text-sm text-gray-500">→</span>
+        <input
+          type="text"
+          placeholder="Hasta: CTE035"
+          value={rangoHasta}
+          onChange={(e) => setRangoHasta(e.target.value.toUpperCase())}
+          className="w-32 px-2 py-1.5 text-sm border rounded-md dark:bg-gray-700 dark:text-white"
+          disabled={!zonaId}
+        />
+        <button
+          onClick={handleImprimirRango}
+          disabled={!zonaId || !rangoDesde || !rangoHasta || loading}
+          className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-md disabled:cursor-not-allowed flex items-center gap-1"
+          title="Imprimir etiquetas del rango especificado"
+        >
+          📄 Rango
+        </button>
 
-            {/* Imprimir etiquetas por zona */}
-            <button
-              onClick={imprimirEtiquetasPorZona}
-              disabled={!zonaId}
-              title={zonaId ? "Imprimir etiquetas por zona" : "Selecciona una zona primero"}
-              className={`px-4 py-2 rounded-lg text-white ${zonaId ? "bg-indigo-600 hover:bg-indigo-700" : "bg-gray-400 cursor-not-allowed"}`}
-            >
-              Imprimir etiquetas por zona
-            </button>
+        <div className="border-l border-gray-300 dark:border-gray-600 h-8 mx-1"></div>
 
+        <select
+          value={zonaId}
+          onChange={(e) => { setZonaId(e.target.value); setPage(1); }}
+          className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white min-w-[160px]"
+        >
+          <option value="">Todas las zonas</option>
+          {zonas.map((z) => (
+            <option key={z.id} value={z.id}>{z.nombre}</option>
+          ))}
+        </select>
 
-          {/* ✅ AGREGAR ESTA SECCIÓN COMPLETA */}
-          {/* Filtro de Rango para Impresión */}
-          <div className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-300 dark:border-gray-600">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              Rango:
-            </label>
-            <input
-              type="text"
-              placeholder="Desde: CTE014"
-              value={rangoDesde}
-              onChange={(e) => setRangoDesde(e.target.value.toUpperCase())}
-              className="w-28 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-              disabled={!zonaId}
-            />
-            <span className="text-sm text-gray-500">→</span>
-            <input
-              type="text"
-              placeholder="Hasta: CTE035"
-              value={rangoHasta}
-              onChange={(e) => setRangoHasta(e.target.value.toUpperCase())}
-              className="w-28 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-              disabled={!zonaId}
-            />
-            <button
-              onClick={handleImprimirRango}
-              disabled={!zonaId || !rangoDesde || !rangoHasta || loading}
-              className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-md transition-colors disabled:cursor-not-allowed flex items-center gap-1"
-              title="Imprimir etiquetas del rango especificado"
-            >
-              📄 Rango
-            </button>
-            {!zonaId && (
-              <span className="text-xs text-gray-500 italic">
-                (Seleccione una zona)
-              </span>
-            )}
-          </div>            
+        <button
+          onClick={imprimirEtiquetasPorZona}
+          disabled={!zonaId}
+          title={zonaId ? "Imprimir etiquetas por zona" : "Selecciona una zona primero"}
+          className={`px-4 py-2 rounded-lg text-white ${zonaId ? "bg-indigo-600 hover:bg-indigo-700" : "bg-gray-400 cursor-not-allowed"}`}
+        >
+          Imprimir etiquetas por zona
+        </button>
+      </div>
 
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4">
+        <button
+          onClick={() => setActiveTab('familias')}
+          className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'familias'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Familias
+        </button>
+        <button
+          onClick={() => setActiveTab('cajas')}
+          className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'cajas'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Cajas
+        </button>
+      </div>
 
-            <button
-              className="px-3 py-2 rounded bg-emerald-600 text-white"
-              onClick={handleExportXlsxAll}
-            >
-              Exportar Excel
-            </button>
-
-          </div>
-        </div>
-
+      {/* ====== TAB FAMILIAS ====== */}
+      {activeTab === 'familias' && (
+      <>
       {/* Tabla */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
         <div className="overflow-x-auto">
@@ -1215,6 +1276,100 @@ const Familias = () => {
           </div>
         </div>
       </div>
+      </>
+      )}
+
+      {/* ====== TAB CAJAS ====== */}
+      {activeTab === 'cajas' && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+          {/* Filtros cajas */}
+          <div className="p-4 flex flex-wrap gap-3 border-b dark:border-gray-700">
+            <input
+              value={cajasSearch}
+              onChange={(e) => setCajasSearch(e.target.value)}
+              placeholder="Buscar código de caja…"
+              className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white w-64"
+            />
+            <select
+              value={cajasEstadoFilter}
+              onChange={(e) => setCajasEstadoFilter(e.target.value)}
+              className="px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+            >
+              <option value="">Todos los estados</option>
+              {ESTADOS_CAJA.map(e => (
+                <option key={e.value} value={e.value}>{e.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => fetchCajas(1)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Buscar
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Código Caja</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Familia</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Zona</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Benefactor</th>
+                  <th className="px-4 py-3 text-left font-medium text-gray-500 dark:text-gray-300">Fecha Asignación</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
+                {cajasLoading && (
+                  <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-500">Cargando…</td></tr>
+                )}
+                {!cajasLoading && cajasRows.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-500">Sin cajas</td></tr>
+                )}
+                {!cajasLoading && cajasRows.map((c) => (
+                  <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="px-4 py-3 font-medium">{c.codigo}</td>
+                    <td className="px-4 py-3">{c.codigo_unico || c.familia_codigo || '-'}</td>
+                    <td className="px-4 py-3">{c.zona_nombre || '-'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        c.estado === 'entregada' ? 'bg-orange-100 text-orange-800' :
+                        c.estado === 'devuelta' ? 'bg-green-100 text-green-800' :
+                        c.estado === 'entregada_familia' ? 'bg-blue-100 text-blue-800' :
+                        c.estado === 'asignada' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {mapEstadoCaja(c.estado)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">{c.benefactor_nombre || '-'}</td>
+                    <td className="px-4 py-3">
+                      {c.fecha_asignacion ? new Date(c.fecha_asignacion).toLocaleDateString('es-PE') : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Paginación cajas */}
+          <div className="flex items-center justify-between px-5 py-3 border-t dark:border-gray-700">
+            <div className="text-sm text-gray-600 dark:text-gray-300">
+              {cajasPagination.total > 0
+                ? <>Mostrando {(cajasPage - 1) * 20 + 1} – {Math.min(cajasPage * 20, cajasPagination.total)} de {cajasPagination.total}</>
+                : '—'}
+            </div>
+            <div className="flex gap-2">
+              <button disabled={!cajasPagination.hasPrev} onClick={() => fetchCajas(cajasPage - 1)}
+                className="px-3 py-2 border rounded disabled:opacity-50">Anterior</button>
+              <span className="px-3 py-2 rounded bg-blue-600 text-white">{cajasPage}</span>
+              <button disabled={!cajasPagination.hasNext} onClick={() => fetchCajas(cajasPage + 1)}
+                className="px-3 py-2 border rounded disabled:opacity-50">Siguiente</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===== Modal Detalle ===== */}
       {showDetalle && detalle && (
@@ -1278,7 +1433,7 @@ const Familias = () => {
                       <td className="px-3 py-2">{i.relacion}</td>
                       <td className="px-3 py-2">{i.nombre || i.nombres}</td>
                       <td className="px-3 py-2">{i.sexo}</td>
-                      <td className="px-3 py-2">{i.edad}</td>
+                      <td className="px-3 py-2">{mostrarEdad(i)}</td>
                     </tr>
                   ))}
                   {integrantes.length === 0 && (
