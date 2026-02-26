@@ -406,9 +406,15 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     setSuccessMessage('');
     
     try {
-      // ValidaciÃ³n mÃ­nima
+      // Validación mínima con mensajes claros
       if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
         return setErrors({ general: 'Ingrese el nombre del cliente.' });
+      }
+
+      // Validar DNI si se ingresó (debe ser 8 dígitos)
+      const dniVal = (formData.cliente_dni || '').trim();
+      if (dniVal && !/^\d{8}$/.test(dniVal)) {
+        return setErrors({ general: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
       }
 
       if (!formData.tipo_servicio_id) {
@@ -423,9 +429,19 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         return setErrors({ general: 'Seleccione la hora del servicio.' });
       }
 
+      if (!formData.precio || parseFloat(formData.precio) <= 0) {
+        return setErrors({ general: 'El precio debe ser mayor a 0.' });
+      }
+
       // Validar pagos
       if (!validarPagos()) {
         return;
+      }
+
+      // Verificar token antes de enviar
+      const token = localStorage.getItem('token');
+      if (!token) {
+        return setErrors({ general: 'Sesión expirada. Por favor, inicie sesión nuevamente.' });
       }
 
       setLoading(true);
@@ -467,7 +483,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         monto: parseFloat(formData.precio),
         pagos: pagos.map(p => ({
           metodo_pago_id: parseInt(p.metodo_pago_id),
-          monto: parseFloat(p.monto)
+          monto: parseFloat(p.monto),
+          fecha_operacion: formData.fecha_operacion || null,
+          hora_operacion: formData.hora_operacion || null,
+          nro_operacion: formData.nro_operacion || null,
+          obs_operacion: formData.obs_operacion || null,
         })),
         observaciones: formData.observaciones || null
       };
@@ -496,15 +516,44 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
     } catch (error) {
       console.error('Error al enviar formulario:', error);
-      setErrors({ general: error.message || 'Error de conexiÃ³n' });
+      // Mensajes de error más descriptivos
+      let msg = error.message || 'Error desconocido';
+      if (msg.includes('500')) msg = 'Error del servidor. Verifique los datos ingresados (DNI, nombre, precio) e intente nuevamente.';
+      else if (msg.includes('401') || msg.includes('Token')) msg = 'Sesión expirada. Por favor, inicie sesión nuevamente.';
+      else if (msg.includes('403')) msg = 'No tiene permisos para realizar esta acción.';
+      else if (msg.includes('DNI')) msg = 'El DNI ingresado no es válido. Debe tener 8 dígitos numéricos.';
+      else if (msg.includes('cliente')) msg = 'Error al registrar el cliente. Verifique nombre y DNI.';
+      else if (msg.includes('Network') || msg.includes('fetch')) msg = 'Error de conexión. Verifique su conexión a internet.';
+      setErrors({ general: msg });
     } finally {
       setLoading(false);
     }
   };
 
-  const abrirTicketPDF = (cobroId) => {
-    // ✅ CORREGIDO: Usar cobrosService.openTicketPdf
-    cobrosService.openTicketPdf(cobroId, { hideCliente: 1 });
+  const abrirTicketPDF = async (cobroId) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setErrors({ general: 'Sesión expirada. Por favor, inicie sesión nuevamente.' });
+        return;
+      }
+      const base = (import.meta.env.VITE_API_URL || 'http://localhost:3001/api').replace(/\/api$/, '');
+      const url = `${base}/api/cobros/${cobroId}/ticket?hideCliente=1`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(errData?.error || `Error ${response.status} al generar ticket`);
+      }
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 5000);
+    } catch (error) {
+      console.error('Error al imprimir ticket:', error);
+      setErrors({ general: error.message || 'Error al generar el ticket.' });
+    }
   };
 
 
@@ -671,9 +720,16 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Registrar Servicios</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-1">Registrar Servicios</h1>
         <p className="text-gray-600 dark:text-gray-400">Registra servicios (Bautismo, Matrimonio, etc.) y su estado</p>
       </div>
+
+      {canCreate && <button
+        onClick={() => { resetForm(); setShowModal(true); }}
+        className="mb-6 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 font-medium"
+      >
+        Nuevo
+      </button>}
 
 
       {/* Mensajes */}
@@ -744,14 +800,6 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             placeholder="Hasta"
           />
-        </div>
-        <div className="flex gap-2">
-          {canCreate && <button
-            onClick={() => { resetForm(); setShowModal(true); }}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-          >
-            Nuevo
-          </button>}
         </div>
       </div>
 

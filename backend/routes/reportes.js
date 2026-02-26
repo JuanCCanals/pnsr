@@ -127,7 +127,7 @@ router.get('/servicios', authenticateToken, authorizePermission('reportes'), asy
         s.descripcion, s.precio, s.estado, s.observaciones,
         cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono
       FROM servicios s LEFT JOIN tipos_servicio ts ON ts.id=s.tipo_servicio_id
-      LEFT JOIN benefactores cl ON cl.id=s.cliente_id ${wSQL}
+      LEFT JOIN clientes cl ON cl.id=s.cliente_id ${wSQL}
       ORDER BY s.fecha_servicio DESC, s.id DESC`, a);
     const [tipos]=await pool.query(`SELECT id,nombre FROM tipos_servicio WHERE activo=1 ORDER BY nombre`);
     res.json({success:true,data:rows,tipos});
@@ -142,17 +142,28 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
     const w=[],a=[];
     if(desde){w.push(`co.fecha_cobro>=?`);a.push(desde);}
     if(hasta){w.push(`co.fecha_cobro<=?`);a.push(hasta);}
-    if(metodo){w.push(`co.metodo_pago_id=?`);a.push(metodo);}
+    if(metodo){w.push(`cp.metodo_pago_id=?`);a.push(metodo);}
     const wSQL=w.length?`WHERE ${w.join(' AND ')}`:'';
     const [rows]=await pool.query(`
       SELECT co.id, co.concepto, co.monto, co.fecha_cobro, co.numero_comprobante, co.observaciones,
-        mp.nombre AS metodo_pago, ts.nombre AS tipo_servicio, s.fecha_servicio, s.hora_servicio,
+        ts.nombre AS tipo_servicio, s.fecha_servicio, s.hora_servicio,
         s.descripcion AS descripcion_servicio, cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono,
-        co.servicio_nombre_temp
-      FROM cobros co LEFT JOIN servicios s ON s.id=co.servicio_id
+        co.servicio_nombre_temp,
+        GROUP_CONCAT(DISTINCT mp.nombre ORDER BY mp.nombre SEPARATOR ', ') AS metodo_pago,
+        GROUP_CONCAT(DISTINCT CONCAT(mp.nombre, ': S/ ', FORMAT(cp.monto, 2)) ORDER BY mp.nombre SEPARATOR ' | ') AS detalle_pagos,
+        MAX(cp.fecha_operacion) AS fecha_operacion,
+        MAX(cp.hora_operacion) AS hora_operacion,
+        GROUP_CONCAT(DISTINCT cp.nro_operacion SEPARATOR ', ') AS nro_operacion,
+        GROUP_CONCAT(DISTINCT cp.obs_operacion SEPARATOR ' | ') AS obs_operacion
+      FROM cobros co
+      LEFT JOIN cobros_pagos cp ON cp.cobro_id=co.id
+      LEFT JOIN metodos_pago mp ON mp.id=cp.metodo_pago_id
+      LEFT JOIN servicios s ON s.id=co.servicio_id
       LEFT JOIN tipos_servicio ts ON ts.id=s.tipo_servicio_id
-      LEFT JOIN benefactores cl ON cl.id=co.cliente_id
-      LEFT JOIN metodos_pago mp ON mp.id=co.metodo_pago_id ${wSQL}
+      LEFT JOIN clientes cl ON cl.id=co.cliente_id
+      ${wSQL}
+      GROUP BY co.id, co.concepto, co.monto, co.fecha_cobro, co.numero_comprobante, co.observaciones,
+        ts.nombre, s.fecha_servicio, s.hora_servicio, s.descripcion, cl.nombre, cl.telefono, co.servicio_nombre_temp
       ORDER BY co.fecha_cobro DESC, co.id DESC`, a);
     const total=rows.reduce((s,r)=>s+Number(r.monto||0),0);
     const [metodos]=await pool.query(`SELECT id,nombre FROM metodos_pago ORDER BY nombre`);

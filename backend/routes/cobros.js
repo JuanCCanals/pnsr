@@ -39,7 +39,7 @@ async function ensureCliente(connection, nombre, dni = '') {
   if (!nom) throw new Error('Nombre requerido');
   if (nom.length > 100) throw new Error('Nombre demasiado largo');
   if (doc && !/^\d{8}$/.test(doc)) {
-    throw new Error('DNI inválido (8 dígitos)');
+    throw new Error('El DNI debe tener exactamente 8 dígitos numéricos');
   }
 
   // 1) Si viene DNI, buscar por DNI
@@ -112,9 +112,17 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
       observaciones = null 
     } = req.body;
 
-    // Validaciones básicas
-    if (!cliente_nombre || !concepto || !monto) {
-      throw new Error('cliente_nombre, concepto y monto son obligatorios');
+    // Validaciones básicas con mensajes claros
+    if (!cliente_nombre || !String(cliente_nombre).trim()) {
+      throw new Error('El nombre del cliente es obligatorio');
+    }
+
+    if (!concepto || !String(concepto).trim()) {
+      throw new Error('El concepto es obligatorio');
+    }
+
+    if (!monto || Number(monto) <= 0) {
+      throw new Error('El monto debe ser mayor a 0');
     }
 
     if (!servicio_id && !caja_id) {
@@ -122,7 +130,7 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
     }
 
     if (!Array.isArray(pagos) || pagos.length === 0) {
-      throw new Error('Debe proporcionar al menos una forma de pago');
+      throw new Error('Debe seleccionar al menos una forma de pago');
     }
 
     // Validar suma de pagos
@@ -130,7 +138,7 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
     const totalEsperado = parseFloat(monto);
     
     if (Math.abs(sumaPagos - totalEsperado) > 0.01) {
-      throw new Error(`La suma de los pagos (${sumaPagos}) no coincide con el total (${totalEsperado})`);
+      throw new Error(`La suma de los pagos (S/ ${sumaPagos.toFixed(2)}) no coincide con el total del servicio (S/ ${totalEsperado.toFixed(2)}). Por favor ajuste los montos.`);
     }
 
     // Asegurar cliente
@@ -172,13 +180,15 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
     // Crear pagos (múltiples)
     for (const pago of pagos) {
       if (!pago.metodo_pago_id || !pago.monto) {
-        throw new Error('Cada pago debe tener metodo_pago_id y monto');
+        throw new Error('Cada forma de pago debe tener un método seleccionado y un monto válido');
       }
 
       await connection.execute(`
-        INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto)
-        VALUES (?, ?, ?)
-      `, [cobro_id, pago.metodo_pago_id, pago.monto]);
+        INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [cobro_id, pago.metodo_pago_id, pago.monto,
+          pago.fecha_operacion || null, pago.hora_operacion || null,
+          pago.nro_operacion || null, pago.obs_operacion || null]);
     }
 
     // Crear comprobante

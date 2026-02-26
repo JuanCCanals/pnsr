@@ -434,22 +434,25 @@ const CobrosReporte = () => {
         <ExportBtn onClick={() => exportXlsx(rows.map(r => ({
           ID: r.id, Concepto: r.concepto || r.servicio_nombre_temp || '', Monto: r.monto,
           'Fecha Cobro': fmtDate(r.fecha_cobro), 'Nro. Comprobante': r.numero_comprobante || '',
-          'Método Pago': r.metodo_pago || '', 'Tipo Servicio': r.tipo_servicio || '',
+          'Método(s) Pago': r.metodo_pago || '', 'Detalle Pagos': r.detalle_pagos || '',
+          'Fec. Operación': fmtDate(r.fecha_operacion), 'Hora Operación': r.hora_operacion || '',
+          'Nro. Operación': r.nro_operacion || '', 'Obs. Operación': r.obs_operacion || '',
+          'Tipo Servicio': r.tipo_servicio || '',
           'Fecha Servicio': fmtDate(r.fecha_servicio), 'Hora Servicio': r.hora_servicio || '',
-          'Desc. Servicio': r.descripcion_servicio || '', Cliente: r.cliente_nombre || '',
-          Teléfono: r.cliente_telefono || '', Observaciones: r.observaciones || '',
+          Cliente: r.cliente_nombre || '', Teléfono: r.cliente_telefono || '',
+          Observaciones: r.observaciones || '',
         })), 'Ingresos_Cobros')} disabled={!rows.length} />
       </div>
       <div className="text-xs text-gray-500 mb-2">{rows.length} cobro(s) | Total: <span className="font-semibold text-green-700">{fmtMoney(total)}</span></div>
       <div className="overflow-x-auto border rounded-lg">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700">
-            <tr>{['#','Concepto','Monto','Fecha','Comprobante','Método Pago','Tipo Servicio','Fec. Servicio','Hora','Cliente','Teléfono','Observaciones'].map(h =>
+            <tr>{['#','Concepto','Monto','Fecha Cobro','Comprobante','Método(s) Pago','Detalle Pagos','Fec. Operación','Hora Op.','Nro. Operación','Obs. Operación','Tipo Servicio','Fec. Servicio','Hora Serv.','Cliente','Teléfono','Observaciones'].map(h =>
               <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y dark:divide-gray-600">
-            {loading && <tr><td colSpan={12} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
-            {!loading && !rows.length && <tr><td colSpan={12} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {loading && <tr><td colSpan={17} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={17} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
             {!loading && rows.map(r => (
               <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                 <td className="px-3 py-2 dark:text-white">{r.id}</td>
@@ -458,6 +461,11 @@ const CobrosReporte = () => {
                 <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_cobro)}</td>
                 <td className="px-3 py-2 dark:text-white">{r.numero_comprobante || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.metodo_pago || '—'}</td>
+                <td className="px-3 py-2 dark:text-white text-xs">{r.detalle_pagos || '—'}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_operacion)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.hora_operacion || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.nro_operacion || '—'}</td>
+                <td className="px-3 py-2 dark:text-white text-xs max-w-xs truncate">{r.obs_operacion || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.tipo_servicio || '—'}</td>
                 <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_servicio)}</td>
                 <td className="px-3 py-2 dark:text-white">{r.hora_servicio || '—'}</td>
