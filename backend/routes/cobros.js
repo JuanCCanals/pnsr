@@ -365,7 +365,9 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
         comp.correlativo,
         comp.numero as numero_comprobante,
         s.tipo_servicio_id,
-        ts.nombre as tipo_servicio_nombre
+        ts.nombre as tipo_servicio_nombre,
+        s.fecha_servicio,
+        s.hora_servicio
       FROM cobros co
       JOIN clientes cl ON co.cliente_id = cl.id
       JOIN comprobantes comp ON comp.cobro_id = co.id
@@ -396,12 +398,15 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     // Generar QR con datos relevantes
     const QRCode = require('qrcode');
-    const qrData = JSON.stringify({
+    const qrPayload = {
       ticket: cobro.numero_comprobante,
       fecha: cobro.fecha_cobro,
       monto: Number(cobro.monto).toFixed(2),
       concepto: cobro.concepto || '',
-    });
+    };
+    if (cobro.fecha_servicio) qrPayload.fecha_servicio = cobro.fecha_servicio;
+    if (cobro.hora_servicio) qrPayload.hora_servicio = cobro.hora_servicio;
+    const qrData = JSON.stringify(qrPayload);
     const qrImageBuffer = await QRCode.toBuffer(qrData, {
       width: 120,
       margin: 1,
@@ -427,7 +432,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
        .text('PARROQUIA N.S.', { align: 'center' });
     doc.fontSize(9).font('Helvetica-Bold')
        .text('DE LA RECONCILIACIÓN', { align: 'center' });
-    doc.moveDown(0.15);
+    doc.moveDown(0.3);
     doc.fontSize(6.5).font('Helvetica')
        .text('Cabildo Metropolitano de Lima', { align: 'center' });
     doc.fontSize(6.5)
@@ -436,22 +441,22 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
        .text('Jr. Carabaya S/N, Plaza de Armas - Lima', { align: 'center' });
 
     // Línea doble
-    doc.moveDown(0.4);
+    doc.moveDown(0.6);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(1.5).stroke();
-    doc.moveDown(0.1);
+    doc.moveDown(0.15);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
-    doc.moveDown(0.3);
+    doc.moveDown(0.5);
 
     // ═══════════ TIPO DE DOCUMENTO ═══════════
     const esCaja = cobro.caja_id && !cobro.servicio_id;
     doc.fontSize(9).font('Helvetica-Bold')
        .text(esCaja ? 'COMPROBANTE - CAJA DEL AMOR' : 'COMPROBANTE DE SERVICIO', { align: 'center' });
-    doc.moveDown(0.15);
+    doc.moveDown(0.2);
     doc.fontSize(8).font('Helvetica-Bold')
        .text(`N° ${cobro.numero_comprobante}`, { align: 'center' });
-    doc.moveDown(0.3);
+    doc.moveDown(0.5);
 
-    // ═══════════ FECHA / HORA ═══════════
+    // ═══════════ FECHA / HORA DE REGISTRO ═══════════
     const fecha = new Date(cobro.fecha_cobro || Date.now());
     const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
@@ -459,29 +464,68 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.fontSize(7.5).font('Helvetica');
     const yFecha = doc.y;
     doc.text(`Fecha: ${fechaStr}`, M, yFecha);
-    doc.text(`Hora: ${horaStr}`, M + CW / 2, yFecha);
-    doc.moveDown(0.4);
+    doc.text(`Hora: ${horaStr}`, M, yFecha, { width: CW, align: 'right' });
+    doc.moveDown(0.6);
 
     // ═══════════ CLIENTE / BENEFACTOR ═══════════
     const mostrarCliente = hideCliente !== '1';
     if (mostrarCliente || esCaja) {
       doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
       doc.undash();
-      doc.moveDown(0.2);
+      doc.moveDown(0.35);
 
       doc.fontSize(7.5).font('Helvetica-Bold')
          .text(esCaja ? 'BENEFACTOR:' : 'CLIENTE:', M);
+      doc.moveDown(0.1);
       doc.fontSize(7.5).font('Helvetica')
          .text(cobro.cliente_nombre || '—', M);
       if (cobro.cliente_dni) {
         doc.text(`DNI: ${cobro.cliente_dni}`, M);
       }
-      doc.moveDown(0.3);
+      doc.moveDown(0.5);
+    }
+
+    // ═══════════ FECHA/HORA DEL SERVICIO (solo para servicios eclesiásticos) ═══════════
+    if (!esCaja && cobro.fecha_servicio) {
+      doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
+      doc.undash();
+      doc.moveDown(0.35);
+
+      const fServ = new Date(cobro.fecha_servicio);
+      const fechaServStr = fServ.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+      let horaServStr = '';
+      if (cobro.hora_servicio) {
+        const hParts = String(cobro.hora_servicio).split(':');
+        const hh = parseInt(hParts[0] || 0);
+        const mm = hParts[1] || '00';
+        const ampm = hh < 12 ? 'AM' : 'PM';
+        const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+        horaServStr = `${h12}:${mm} ${ampm}`;
+      }
+
+      doc.fontSize(7.5).font('Helvetica-Bold')
+         .text('FECHA Y HORA DEL SERVICIO:', M);
+      doc.moveDown(0.15);
+      doc.fontSize(8).font('Helvetica');
+      const yServ = doc.y;
+      doc.text(`Fecha: ${fechaServStr}`, M, yServ);
+      if (horaServStr) {
+        doc.text(`Hora: ${horaServStr}`, M, yServ, { width: CW, align: 'right' });
+      }
+
+      if (cobro.observaciones) {
+        doc.moveDown(0.25);
+        doc.fontSize(6.5).font('Helvetica-Oblique')
+           .text(`Obs: ${cobro.observaciones}`, M, doc.y, { width: CW });
+      }
+
+      doc.moveDown(0.5);
     }
 
     // ═══════════ DETALLE ═══════════
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
-    doc.moveDown(0.2);
+    doc.moveDown(0.3);
 
     // Header tabla
     doc.fontSize(7).font('Helvetica-Bold');
@@ -489,69 +533,66 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.text('DESCRIPCIÓN', M, yTH, { width: CW * 0.55 });
     doc.text('CANT', M + CW * 0.58, yTH, { width: 30, align: 'center' });
     doc.text('TOTAL', M + CW * 0.75, yTH, { width: CW * 0.25, align: 'right' });
-    doc.moveDown(0.2);
+    doc.moveDown(0.3);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
-    doc.moveDown(0.15);
+    doc.moveDown(0.25);
 
-    // Item
+    // Item — medir la altura real del texto para evitar sobreposición
     doc.fontSize(7).font('Helvetica');
+    const conceptoText = cobro.concepto || 'Servicio';
+    const conceptoHeight = doc.heightOfString(conceptoText, { width: CW * 0.55 });
     const yItem = doc.y;
-    doc.text(cobro.concepto || 'Servicio', M, yItem, { width: CW * 0.55 });
+    doc.text(conceptoText, M, yItem, { width: CW * 0.55 });
     doc.text('1', M + CW * 0.58, yItem, { width: 30, align: 'center' });
     doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M + CW * 0.75, yItem, { width: CW * 0.25, align: 'right' });
 
-    doc.moveDown(0.5);
+    // Mover Y al final real del texto del concepto + margen
+    doc.y = yItem + conceptoHeight + 8;
+
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
-    doc.moveDown(0.3);
+    doc.moveDown(0.5);
 
     // ═══════════ TOTAL ═══════════
     doc.fontSize(11).font('Helvetica-Bold');
     const yTotal = doc.y;
     doc.text('TOTAL:', M, yTotal);
     doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M, yTotal, { width: CW, align: 'right' });
-    doc.moveDown(0.4);
+    doc.moveDown(0.6);
 
     // ═══════════ FORMAS DE PAGO ═══════════
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
     doc.undash();
-    doc.moveDown(0.2);
+    doc.moveDown(0.35);
 
     doc.fontSize(7).font('Helvetica-Bold').text('FORMA(S) DE PAGO:', M);
-    doc.moveDown(0.1);
+    doc.moveDown(0.15);
     doc.font('Helvetica');
     pagos.forEach(pago => {
       doc.fontSize(7).text(`  • ${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, M);
     });
 
-    // Observaciones
-    if (cobro.observaciones) {
-      doc.moveDown(0.3);
-      doc.fontSize(6.5).font('Helvetica-Oblique')
-         .text(`Obs: ${cobro.observaciones}`, M, doc.y, { width: CW });
-    }
-
     // ═══════════ QR CODE ═══════════
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
-    doc.moveDown(0.3);
+    doc.moveDown(0.5);
 
     const qrSize = 70;
     const qrX = (W - qrSize) / 2;
     doc.image(qrImageBuffer, qrX, doc.y, { width: qrSize, height: qrSize });
-    doc.y += qrSize + 3;
+    doc.y += qrSize + 5;
     doc.fontSize(5.5).font('Helvetica')
        .text('Escanee para verificar', { align: 'center' });
 
     // ═══════════ FOOTER ═══════════
-    doc.moveDown(0.4);
+    doc.moveDown(0.6);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(1.5).stroke();
-    doc.moveDown(0.1);
+    doc.moveDown(0.15);
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
-    doc.moveDown(0.3);
+    doc.moveDown(0.4);
 
     doc.fontSize(7).font('Helvetica-Bold')
        .text(footerText, { align: 'center', width: CW });
-    doc.moveDown(0.15);
+    doc.moveDown(0.2);
     doc.fontSize(5.5).font('Helvetica')
        .text('Documento sin efectos legales del sistema', { align: 'center' });
     doc.fontSize(5.5)
