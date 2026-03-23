@@ -76,6 +76,88 @@ router.get('/stats', authenticateToken, authorizePermission('zonas'), async (req
   }
 });
 
+// ==================== IMPORTAR ZONAS DESDE EXCEL ====================
+// POST /api/zonas/import-excel
+// Body: { zonas: [{ nombre, abreviatura, descripcion, numero_familias, activo }] }
+router.post('/import-excel', authenticateToken, authorizePermission('zonas.crear'), async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { zonas } = req.body;
+
+    if (!zonas || !Array.isArray(zonas) || zonas.length === 0) {
+      return res.status(400).json({ success: false, error: 'No se recibieron zonas para importar' });
+    }
+
+    await conn.beginTransaction();
+
+    let created = 0;
+    let updated = 0;
+    const errors = [];
+
+    for (let i = 0; i < zonas.length; i++) {
+      const z = zonas[i];
+      const nombre = (z.nombre || '').trim();
+      const abreviatura = (z.abreviatura || '').trim().toUpperCase();
+      const descripcion = (z.descripcion || '').trim();
+      const numero_familias = parseInt(z.numero_familias) || 0;
+      const activo = z.activo !== undefined ? (z.activo ? 1 : 0) : 1;
+
+      if (!nombre) {
+        errors.push(`Fila ${i + 2}: nombre vacío, se omitió`);
+        continue;
+      }
+
+      // Buscar si ya existe por abreviatura (si tiene) o por nombre exacto
+      let existing = null;
+      if (abreviatura) {
+        const [rows] = await conn.execute(
+          'SELECT id FROM zonas WHERE abreviatura = ? LIMIT 1',
+          [abreviatura]
+        );
+        if (rows.length > 0) existing = rows[0];
+      }
+
+      if (!existing) {
+        const [rows] = await conn.execute(
+          'SELECT id FROM zonas WHERE LOWER(nombre) = LOWER(?) LIMIT 1',
+          [nombre]
+        );
+        if (rows.length > 0) existing = rows[0];
+      }
+
+      if (existing) {
+        await conn.execute(
+          `UPDATE zonas SET nombre = ?, abreviatura = ?, descripcion = ?, numero_familias = ?, activo = ? WHERE id = ?`,
+          [nombre, abreviatura, descripcion, numero_familias, activo, existing.id]
+        );
+        updated++;
+      } else {
+        await conn.execute(
+          `INSERT INTO zonas (nombre, abreviatura, descripcion, numero_familias, activo) VALUES (?, ?, ?, ?, ?)`,
+          [nombre, abreviatura, descripcion, numero_familias, activo]
+        );
+        created++;
+      }
+    }
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      message: `Importación completada: ${created} creada(s), ${updated} actualizada(s)${errors.length ? `. ${errors.length} omitida(s)` : ''}`,
+      created,
+      updated,
+      errors,
+    });
+  } catch (error) {
+    await conn.rollback();
+    console.error('Error importando zonas:', error);
+    res.status(500).json({ success: false, error: 'Error al importar zonas: ' + error.message });
+  } finally {
+    conn.release();
+  }
+});
+
 // Obtener una zona por ID
 router.get('/:id', authenticateToken, authorizePermission('zonas'), async (req, res) => {
   try {

@@ -869,6 +869,7 @@ const serviciosRoute        = require('../routes/servicios'); // <-- usa el arch
 const clientesRoute         = require('../routes/clientes');  // <-- nuevo
 const cobrosRoute           = require('../routes/cobros');    // <-- nuevo
 const configuracionRoute    = require('../routes/configuracion');
+const backupRoute           = require('../routes/backup');
 const metodosPagoRoute      = require('../routes/metodos-pago');  // ← NUEVO
 const ventasRoute           = require('../routes/ventas');    // <-- usa el archivo en minúsculas
 
@@ -889,6 +890,7 @@ app.use('/api/cobros',             cobrosRoute);
 app.use('/api/metodos-pago',       metodosPagoRoute);  // ← NUEVO
 app.use('/api/ventas',             ventasRoute);
 app.use('/api/configuracion',      configuracionRoute);
+app.use('/api/backup',             backupRoute);
 
 
 

@@ -1,6 +1,6 @@
 // frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect } from 'react';
-import { cobrosService, metodoPagoService } from '../services/api'; // ✅ CORREGIDO
+import { cobrosService, metodoPagoService, catalogosService, ventasService } from '../services/api';
 import { consultarDNI } from '../services/dniService'; // â† AGREGAR ESTA LÃNEA
 import { useAuth } from '../contexts/AuthContext';
 
@@ -64,8 +64,8 @@ function printTicket80(cobro) {
 
 
 // Crea o devuelve el cliente por nombre y opcional DNI
-async function ensureCliente(nombre, dni = '') {
-  const data = await cobrosService.ensureCliente(nombre, dni);
+async function ensureCliente(nombre, dni = '', telefono = '', email = '') {
+  const data = await cobrosService.ensureCliente(nombre, dni, telefono, email);
   if (!data?.success) throw new Error(data?.error || 'No se pudo asegurar cliente');
   return data.data.id; // cliente_id
 }
@@ -221,6 +221,8 @@ const Servicios = () => {
     cliente_id: '',         // si no tienes selector aún, puedes dejarlo vacío y el payload pondrá 1
     cliente_nombre: '',   // 👈 nuevo
     cliente_dni: '',      // 👈 opcional
+    cliente_telefono: '', // celular del cliente
+    cliente_email: '',    // correo del cliente
     fecha_servicio: '',
     hora_servicio: '',
     precio: '',             // se autocompleta al elegir el tipo (precio_base)
@@ -238,11 +240,26 @@ const Servicios = () => {
 
   // ========== NUEVOS ESTADOS ==========
 const [buscandoDNI, setBuscandoDNI] = useState(false);
+const [dniApi, setDniApi] = useState('apisperu'); // 'apisperu' o 'apisnetpe'
 const [metodosPago, setMetodosPago] = useState([]);
 const [pagos, setPagos] = useState([
   { metodo_pago_id: '', monto: '' }
 ]);
 const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
+
+// ========== MODO CAJA DEL AMOR ==========
+const CAJA_AMOR_VALUE = 'CAJA_DEL_AMOR'; // valor especial en el select
+const [modoCaja, setModoCaja] = useState(false);
+const [modalidades, setModalidades] = useState([]);
+const [puntosVenta, setPuntosVenta] = useState([]);
+const [cajaFormData, setCajaFormData] = useState({
+  modalidad_id: '',
+  punto_venta_id: '',
+  codigo_caja: '',
+  fecha_devolucion: '',
+});
+const [cajaInfo, setCajaInfo] = useState(null); // info de la caja buscada
+const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   const estadosServicios = [
     { value: 'programado', label: 'Programado', color: 'bg-yellow-100 text-yellow-800' },
@@ -256,7 +273,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     loadTiposServicio();
     loadFormasPago();
     loadStats();
-    loadMetodosPago(); // â† AGREGAR ESTA LÃNEA
+    loadMetodosPago();
+    loadCatalogos();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, searchTerm, selectedTipo, selectedEstado, fechaDesde, fechaHasta]);
 
@@ -322,13 +340,71 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
   const loadMetodosPago = async () => {
     try {
-      // ✅ CORREGIDO: Usar metodoPagoService en lugar de fetch directo
       const response = await metodoPagoService.getAll();
       if (response.success) {
         setMetodosPago(response.data);
       }
     } catch (error) {
       console.error('Error cargando métodos de pago:', error);
+    }
+  };
+
+  const loadCatalogos = async () => {
+    try {
+      const [modRes, pvRes] = await Promise.all([
+        catalogosService.getModalidades(),
+        catalogosService.getPuntosVenta(),
+      ]);
+      if (modRes.success) setModalidades(modRes.data || []);
+      if (pvRes.success) setPuntosVenta(pvRes.data || []);
+    } catch (error) {
+      console.error('Error cargando catálogos:', error);
+    }
+  };
+
+  // ========== CAJA DEL AMOR: buscar caja por código ==========
+  const handleBuscarCaja = async () => {
+    const codigo = cajaFormData.codigo_caja?.trim();
+    if (!codigo) return alert('Ingrese un código de caja');
+    setBuscandoCaja(true);
+    setCajaInfo(null);
+    try {
+      const resp = await ventasService.buscarCaja(codigo);
+      if (resp.success && resp.data) {
+        setCajaInfo(resp.data);
+      } else {
+        alert(resp.error || 'Caja no encontrada o no disponible');
+      }
+    } catch (err) {
+      console.error('Error buscando caja:', err);
+      alert('Error al buscar la caja');
+    } finally {
+      setBuscandoCaja(false);
+    }
+  };
+
+  // ========== CAMBIO TIPO SERVICIO: detectar modo Caja del Amor ==========
+  const handleTipoChangeWrapper = (val) => {
+    if (val === CAJA_AMOR_VALUE) {
+      setModoCaja(true);
+      // Auto-seleccionar modalidad S/40 (id=1) y precio
+      const mod40 = modalidades.find(m => Number(m.id) === 1);
+      setFormData(prev => ({
+        ...prev,
+        tipo_servicio_id: val,
+        precio: mod40 ? String(mod40.costo) : '40.00',
+        hora_servicio: '08:00', // default, no requerido en modo caja
+        estado: 'programado',
+      }));
+      setCajaFormData(prev => ({
+        ...prev,
+        modalidad_id: '1',
+      }));
+    } else {
+      setModoCaja(false);
+      setCajaFormData({ modalidad_id: '', punto_venta_id: '', codigo_caja: '', fecha_devolucion: '' });
+      setCajaInfo(null);
+      handleTipoChange(val); // función original
     }
   };
 
@@ -344,7 +420,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
     setBuscandoDNI(true);
     try {
-      const resultado = await consultarDNI(dni);
+      const resultado = await consultarDNI(dni, dniApi);
       setFormData(prev => ({
         ...prev,
         cliente_nombre: resultado.nombreCompleto
@@ -406,12 +482,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     setSuccessMessage('');
     
     try {
-      // Validación mínima con mensajes claros
+      // Validación común
       if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
         return setErrors({ general: 'Ingrese el nombre del cliente.' });
       }
 
-      // Validar DNI si se ingresó (debe ser 8 dígitos)
       const dniVal = (formData.cliente_dni || '').trim();
       if (dniVal && !/^\d{8}$/.test(dniVal)) {
         return setErrors({ general: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
@@ -422,10 +497,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       }
 
       if (!formData.fecha_servicio) {
-        return setErrors({ general: 'Seleccione la fecha del servicio.' });
+        return setErrors({ general: 'Seleccione la fecha.' });
       }
 
-      if (!formData.hora_servicio) {
+      // Hora solo requerida en modo servicio
+      if (!modoCaja && !formData.hora_servicio) {
         return setErrors({ general: 'Seleccione la hora del servicio.' });
       }
 
@@ -433,12 +509,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         return setErrors({ general: 'El precio debe ser mayor a 0.' });
       }
 
-      // Validar pagos
-      if (!validarPagos()) {
-        return;
-      }
+      if (!validarPagos()) return;
 
-      // Verificar token antes de enviar
       const token = localStorage.getItem('token');
       if (!token) {
         return setErrors({ general: 'Sesión expirada. Por favor, inicie sesión nuevamente.' });
@@ -446,69 +518,159 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
       setLoading(true);
 
-      // Resolver cliente_id
-      const clienteId = await ensureCliente(
-        formData.cliente_nombre.trim(), 
-        (formData.cliente_dni || '').trim()
-      );
+      // ============================================================
+      // MODO CAJA DEL AMOR
+      // ============================================================
+      if (modoCaja) {
+        // Validaciones específicas de caja
+        if (!cajaFormData.modalidad_id) {
+          return setErrors({ general: 'Seleccione la modalidad de caja.' });
+        }
+        if (!cajaFormData.punto_venta_id) {
+          return setErrors({ general: 'Seleccione el punto de venta.' });
+        }
+        if (!cajaInfo) {
+          return setErrors({ general: 'Busque y seleccione un código de caja válido.' });
+        }
 
-      // Crear servicio primero
-      const servicioPayload = {
-        tipo_servicio_id: Number(formData.tipo_servicio_id),
-        cliente_id: clienteId,
-        fecha_servicio: formData.fecha_servicio,
-        hora_servicio: formData.hora_servicio,
-        precio: parseFloat(formData.precio),
-        estado: 'programado',
-        observaciones: formData.observaciones || null
-      };
+        // Nombre dividido para benefactor
+        const nombreCompleto = formData.cliente_nombre.trim();
+        const partes = nombreCompleto.split(' ');
+        const nombres = partes.slice(0, Math.ceil(partes.length / 2)).join(' ');
+        const apellidos = partes.slice(Math.ceil(partes.length / 2)).join(' ');
 
-      const servicioResp = await crearServicio(servicioPayload);
+        // 1) Registrar venta via ventasService (tabla ventas + ventas_cajas + cajas)
+        const metodoPagoObj = metodosPago.find(m => String(m.id) === String(pagos[0]?.metodo_pago_id));
+        const formaPagoNombre = metodoPagoObj?.nombre || 'Efectivo';
 
-      if (!servicioResp.success) {
-        throw new Error(servicioResp.message || 'Error al crear servicio');
+        const ventaPayload = {
+          recibo: `SRV-${Date.now()}`,
+          fecha: formData.fecha_servicio,
+          modalidad_id: Number(cajaFormData.modalidad_id),
+          punto_venta_id: Number(cajaFormData.punto_venta_id),
+          forma_pago: formaPagoNombre,
+          monto: parseFloat(formData.precio),
+          moneda: 'PEN',
+          fecha_devolucion: cajaFormData.fecha_devolucion || null,
+          observaciones: formData.observaciones || null,
+          benefactor: {
+            nombres,
+            apellidos,
+            telefono: formData.cliente_telefono?.trim() || '',
+            correo: formData.cliente_email?.trim() || '',
+          },
+          codigos: [cajaInfo.caja_codigo || cajaInfo.familia_codigo],
+          pagos: pagos.map(p => ({
+            forma_pago: metodosPago.find(m => String(m.id) === String(p.metodo_pago_id))?.nombre || 'Efectivo',
+            monto: parseFloat(p.monto),
+            fecha_operacion: formData.fecha_operacion || null,
+            hora_operacion: formData.hora_operacion || null,
+            nro_operacion: formData.nro_operacion || null,
+            obs_operacion: formData.obs_operacion || null,
+          })),
+        };
+
+        const ventaResp = await ventasService.registrar(ventaPayload);
+        if (!ventaResp.success) {
+          throw new Error(ventaResp.error || 'Error al registrar venta de caja');
+        }
+
+        // 2) Crear cobro para generar comprobante/ticket
+        const modLabel = modalidades.find(m => String(m.id) === String(cajaFormData.modalidad_id))?.nombre || 'Caja del Amor';
+
+        const cobroPayload = {
+          servicio_id: null,
+          caja_id: cajaInfo.caja_id,
+          cliente_nombre: formData.cliente_nombre.trim(),
+          cliente_dni: formData.cliente_dni?.trim() || '',
+          cliente_telefono: formData.cliente_telefono?.trim() || '',
+          cliente_email: formData.cliente_email?.trim() || '',
+          concepto: `Caja del Amor: ${modLabel}`,
+          monto: parseFloat(formData.precio),
+          pagos: pagos.map(p => ({
+            metodo_pago_id: parseInt(p.metodo_pago_id),
+            monto: parseFloat(p.monto),
+            fecha_operacion: formData.fecha_operacion || null,
+            hora_operacion: formData.hora_operacion || null,
+            nro_operacion: formData.nro_operacion || null,
+            obs_operacion: formData.obs_operacion || null,
+          })),
+          observaciones: formData.observaciones || null
+        };
+
+        const cobroData = await cobrosService.crear(cobroPayload);
+        if (!cobroData.success) {
+          throw new Error(cobroData.error || 'Error al crear cobro');
+        }
+
+        setSuccessMessage('Venta de Caja del Amor registrada exitosamente');
+
+        if (mostrarTicketAuto && cobroData.data.cobro_id) {
+          setTimeout(() => abrirTicketPDF(cobroData.data.cobro_id), 500);
+        }
+
+      // ============================================================
+      // MODO SERVICIO ECLESIÁSTICO (flujo original)
+      // ============================================================
+      } else {
+        const clienteId = await ensureCliente(
+          formData.cliente_nombre.trim(),
+          (formData.cliente_dni || '').trim(),
+          (formData.cliente_telefono || '').trim(),
+          (formData.cliente_email || '').trim()
+        );
+
+        const servicioPayload = {
+          tipo_servicio_id: Number(formData.tipo_servicio_id),
+          cliente_id: clienteId,
+          fecha_servicio: formData.fecha_servicio,
+          hora_servicio: formData.hora_servicio,
+          precio: parseFloat(formData.precio),
+          estado: 'programado',
+          observaciones: formData.observaciones || null
+        };
+
+        const servicioResp = await crearServicio(servicioPayload);
+        if (!servicioResp.success) {
+          throw new Error(servicioResp.message || 'Error al crear servicio');
+        }
+
+        const servicio_id = servicioResp.data.id;
+        const tipoLabel = tiposServicio.find(t => t.value === Number(formData.tipo_servicio_id))?.label || 'Servicio';
+
+        const cobroPayload = {
+          servicio_id,
+          caja_id: null,
+          cliente_nombre: formData.cliente_nombre.trim(),
+          cliente_dni: formData.cliente_dni?.trim() || '',
+          cliente_telefono: formData.cliente_telefono?.trim() || '',
+          cliente_email: formData.cliente_email?.trim() || '',
+          concepto: `Servicio: ${tipoLabel}`,
+          monto: parseFloat(formData.precio),
+          pagos: pagos.map(p => ({
+            metodo_pago_id: parseInt(p.metodo_pago_id),
+            monto: parseFloat(p.monto),
+            fecha_operacion: formData.fecha_operacion || null,
+            hora_operacion: formData.hora_operacion || null,
+            nro_operacion: formData.nro_operacion || null,
+            obs_operacion: formData.obs_operacion || null,
+          })),
+          observaciones: formData.observaciones || null
+        };
+
+        const cobroData = await cobrosService.crear(cobroPayload);
+        if (!cobroData.success) {
+          throw new Error(cobroData.error || 'Error al crear cobro');
+        }
+
+        setSuccessMessage('Servicio y cobro registrados exitosamente');
+
+        if (mostrarTicketAuto && cobroData.data.cobro_id) {
+          setTimeout(() => abrirTicketPDF(cobroData.data.cobro_id), 500);
+        }
       }
 
-      const servicio_id = servicioResp.data.id;
-
-      // Crear cobro con pagos mÃºltiples
-      const tipoLabel = tiposServicio.find(t => t.value === Number(formData.tipo_servicio_id))?.label || 'Servicio';
-      
-      const cobroPayload = {
-        servicio_id,
-        caja_id: null,
-        cliente_nombre: formData.cliente_nombre.trim(),
-        cliente_dni: formData.cliente_dni?.trim() || '',
-        concepto: `Servicio: ${tipoLabel}`,
-        monto: parseFloat(formData.precio),
-        pagos: pagos.map(p => ({
-          metodo_pago_id: parseInt(p.metodo_pago_id),
-          monto: parseFloat(p.monto),
-          fecha_operacion: formData.fecha_operacion || null,
-          hora_operacion: formData.hora_operacion || null,
-          nro_operacion: formData.nro_operacion || null,
-          obs_operacion: formData.obs_operacion || null,
-        })),
-        observaciones: formData.observaciones || null
-      };
-
-      // ✅ CORREGIDO: Usar cobrosService.crear en lugar de fetch directo
-      const cobroData = await cobrosService.crear(cobroPayload);
-
-      if (!cobroData.success) {
-        throw new Error(cobroData.error || 'Error al crear cobro');
-      }
-
-      setSuccessMessage('Servicio y cobro registrados exitosamente');
-      
-      // Si se pidiÃ³ imprimir ticket automÃ¡ticamente
-      if (mostrarTicketAuto && cobroData.data.cobro_id) {
-        setTimeout(() => {
-          abrirTicketPDF(cobroData.data.cobro_id);
-        }, 500);
-      }
-
-      // Limpiar formulario
+      // Limpiar y cerrar
       resetForm();
       setShowModal(false);
       loadServicios();
@@ -516,9 +678,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
     } catch (error) {
       console.error('Error al enviar formulario:', error);
-      // Mensajes de error más descriptivos
       let msg = error.message || 'Error desconocido';
-      if (msg.includes('500')) msg = 'Error del servidor. Verifique los datos ingresados (DNI, nombre, precio) e intente nuevamente.';
+      if (msg.includes('500')) msg = 'Error del servidor. Verifique los datos ingresados e intente nuevamente.';
       else if (msg.includes('401') || msg.includes('Token')) msg = 'Sesión expirada. Por favor, inicie sesión nuevamente.';
       else if (msg.includes('403')) msg = 'No tiene permisos para realizar esta acción.';
       else if (msg.includes('DNI')) msg = 'El DNI ingresado no es válido. Debe tener 8 dígitos numéricos.';
@@ -564,6 +725,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       cliente_id: servicio.cliente_id || '',
       cliente_nombre: servicio.cliente_nombre || '',
       cliente_dni: servicio.cliente_dni || '',
+      cliente_telefono: servicio.cliente_telefono || '',
+      cliente_email: servicio.cliente_email || '',
       fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0,10) : '',
       hora_servicio: servicio.hora_servicio || '',
       precio: servicio.precio ?? '',
@@ -666,6 +829,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       cliente_id: '',
       cliente_nombre: '',
       cliente_dni: '',
+      cliente_telefono: '',
+      cliente_email: '',
       fecha_servicio: '',
       hora_servicio: '',
       precio: '',
@@ -679,8 +844,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     });
     setEditingServicio(null);
     setErrors({});
-    setPagos([{ metodo_pago_id: '', monto: '' }]); // â† AGREGAR ESTA LÃNEA
-    setMostrarTicketAuto(false); // â† AGREGAR ESTA LÃNEA
+    setPagos([{ metodo_pago_id: "", monto: "" }]);
+    setMostrarTicketAuto(false);
+    setModoCaja(false);
+    setCajaFormData({ modalidad_id: "", punto_venta_id: "", codigo_caja: "", fecha_devolucion: "" });
+    setCajaInfo(null);
   };
   
 
@@ -964,11 +1132,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       {/* Modal Nuevo/Editar */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  {editingServicio ? 'Editar Servicio' : 'Nuevo Servicio'}
+                  {editingServicio ? 'Editar Servicio' : modoCaja ? '🎁 Nueva Venta — Caja del Amor' : 'Nuevo Servicio'}
                 </h2>
                 <button
                   onClick={() => setShowModal(false)}
@@ -981,19 +1149,23 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-    {/* Tipo */}
-    <div>
+  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+    {/* === FILA 1: Tipo | Fecha | Hora (solo servicio) | Precio === */}
+    {/* Tipo de Servicio */}
+    <div className="sm:col-span-2 lg:col-span-1">
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Tipo de Servicio *
+        Tipo de Servicio <span className="text-red-500">*</span>
       </label>
       <select
         value={formData.tipo_servicio_id}
-        onChange={(e) => handleTipoChange(e.target.value)}
+        onChange={(e) => handleTipoChangeWrapper(e.target.value)}
         className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.tipo_servicio_id ? 'border-red-500' : 'border-gray-300'}`}
         required
       >
         <option value="">Seleccionar tipo</option>
+        <option value={CAJA_AMOR_VALUE} className="font-bold text-orange-600">🎁 Caja del Amor</option>
+        <option disabled>──────────────</option>
         {tiposServicio.map(tipo => (
           <option key={tipo.value} value={tipo.value}>{tipo.label}</option>
         ))}
@@ -1004,7 +1176,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     {/* Fecha */}
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Fecha del Servicio *
+        Fecha del Servicio <span className="text-red-500">*</span>
       </label>
       <input
         type="date"
@@ -1016,61 +1188,11 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       {errors.fecha_servicio && <p className="mt-1 text-sm text-red-600">{errors.fecha_servicio}</p>}
     </div>
 
-    {/* Cliente (obligatorio) */}
-<div>
-  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-    Cliente (nombre completo) <span className="text-red-500">*</span>
-  </label>
-  <input
-    type="text"
-    name="cliente_nombre"
-    value={formData.cliente_nombre}
-    onChange={(e) => setFormData({...formData, cliente_nombre: e.target.value})}
-    required
-    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-    placeholder="Nombre completo del cliente"
-  />
-</div>
-
-    {/* DNI (opcional) con botón de búsqueda */}
+    {/* Hora — solo en modo servicio */}
+    {!modoCaja && (
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        DNI (opcional)
-      </label>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          name="cliente_dni"
-          value={formData.cliente_dni}
-          onChange={(e) => setFormData({...formData, cliente_dni: e.target.value.replace(/\D/g, '')})}
-          maxLength="8"
-          className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-          placeholder="DNI (8 dígitos)"
-        />
-        <button
-          type="button"
-          onClick={handleBuscarDNI}
-          disabled={buscandoDNI || !formData.cliente_dni || formData.cliente_dni.length !== 8}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          title="Buscar DNI en RENIEC"
-        >
-          {buscandoDNI ? (
-            <span className="animate-spin">🔄</span>
-          ) : (
-            '🔍'
-          )}
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-        Ingrese el DNI y presione el botón para autocompletar el nombre
-      </p>
-    </div>
-
-
-    {/* Hora del Servicio */}
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Hora del Servicio <span className="text-red-500">*</span>
+        Hora <span className="text-red-500">*</span>
       </label>
       <select
         name="hora_servicio"
@@ -1079,7 +1201,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         required
         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
       >
-        <option value="">Seleccionar hora</option>
+        <option value="">Seleccionar</option>
         {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
           <option key={`${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
             {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
@@ -1089,12 +1211,35 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
           </option>
         ])}
       </select>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-        Horario disponible: 7:00 AM - 9:00 PM (solo en punto o media hora)
-      </p>
     </div>
+    )}
 
-    {/* Precio (S/) */}
+    {/* Modalidad — solo en modo Caja del Amor */}
+    {modoCaja && (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        Modalidad <span className="text-red-500">*</span>
+      </label>
+      <select
+        value={cajaFormData.modalidad_id}
+        onChange={(e) => {
+          const modId = e.target.value;
+          const mod = modalidades.find(m => String(m.id) === modId);
+          setCajaFormData(prev => ({ ...prev, modalidad_id: modId }));
+          if (mod) setFormData(prev => ({ ...prev, precio: String(mod.costo) }));
+        }}
+        required
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+      >
+        <option value="">Seleccionar</option>
+        {modalidades.map(m => (
+          <option key={m.id} value={m.id}>{m.nombre} (S/ {Number(m.costo).toFixed(2)})</option>
+        ))}
+      </select>
+    </div>
+    )}
+
+    {/* Precio */}
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Precio (S/)</label>
       <input
@@ -1108,7 +1253,150 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       />
     </div>
 
-    {/* Estado */}
+    {/* === FILA 2: Cliente | DNI+botón+radio === */}
+    {/* Cliente */}
+    <div className="lg:col-span-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+        {modoCaja ? 'Benefactor' : 'Cliente'} <span className="text-red-500">*</span>
+      </label>
+      <input
+        type="text"
+        name="cliente_nombre"
+        value={formData.cliente_nombre}
+        onChange={(e) => setFormData({...formData, cliente_nombre: e.target.value})}
+        required
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        placeholder="Nombre completo"
+      />
+    </div>
+
+    {/* DNI + botón + radio API */}
+    <div className="lg:col-span-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DNI</label>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          name="cliente_dni"
+          value={formData.cliente_dni}
+          onChange={(e) => setFormData({...formData, cliente_dni: e.target.value.replace(/\D/g, '')})}
+          maxLength="8"
+          className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm"
+          placeholder="8 dígitos"
+        />
+        <button
+          type="button"
+          onClick={handleBuscarDNI}
+          disabled={buscandoDNI || !formData.cliente_dni || formData.cliente_dni.length !== 8}
+          className="shrink-0 px-2 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+          title="Buscar DNI"
+        >
+          {buscandoDNI ? '🔄' : '🔍'}
+        </button>
+        <div className="flex flex-col justify-center text-[10px] leading-tight text-gray-500 dark:text-gray-400 shrink-0">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="dniApi" value="apisperu" checked={dniApi === 'apisperu'} onChange={(e) => setDniApi(e.target.value)} className="w-3 h-3" />
+            APISPeru
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="dniApi" value="apisnetpe" checked={dniApi === 'apisnetpe'} onChange={(e) => setDniApi(e.target.value)} className="w-3 h-3" />
+            Optimize
+          </label>
+        </div>
+      </div>
+    </div>
+
+    {/* === FILA 3: Celular | Correo === */}
+    {/* Celular */}
+    <div className="lg:col-span-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Celular</label>
+      <input
+        type="text"
+        value={formData.cliente_telefono}
+        onChange={(e) => setFormData({...formData, cliente_telefono: e.target.value.replace(/\D/g, '')})}
+        maxLength="15"
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        placeholder="N° celular"
+      />
+    </div>
+
+    {/* Correo */}
+    <div className="lg:col-span-2">
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Correo</label>
+      <input
+        type="email"
+        value={formData.cliente_email}
+        onChange={(e) => setFormData({...formData, cliente_email: e.target.value})}
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        placeholder="correo@ejemplo.com"
+      />
+    </div>
+
+    {/* === CAMPOS CAJA DEL AMOR (solo en modo caja) === */}
+    {modoCaja && (
+    <>
+      {/* Punto de Venta */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Punto de Venta <span className="text-red-500">*</span>
+        </label>
+        <select
+          value={cajaFormData.punto_venta_id}
+          onChange={(e) => setCajaFormData(prev => ({ ...prev, punto_venta_id: e.target.value }))}
+          required
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        >
+          <option value="">Seleccionar</option>
+          {puntosVenta.map(pv => (
+            <option key={pv.id} value={pv.id}>{pv.nombre}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Código de Caja */}
+      <div className="lg:col-span-2">
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Código de Caja <span className="text-red-500">*</span>
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={cajaFormData.codigo_caja}
+            onChange={(e) => { setCajaFormData(prev => ({ ...prev, codigo_caja: e.target.value.toUpperCase() })); setCajaInfo(null); }}
+            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+            placeholder="Ej: CTE014"
+          />
+          <button
+            type="button"
+            onClick={handleBuscarCaja}
+            disabled={buscandoCaja || !cajaFormData.codigo_caja}
+            className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm"
+          >
+            {buscandoCaja ? '🔄' : '🔍 Buscar'}
+          </button>
+        </div>
+        {cajaInfo && (
+          <p className="mt-1 text-xs text-green-600 dark:text-green-400">
+            ✅ Caja: {cajaInfo.caja_codigo} | Familia: {cajaInfo.familia_codigo || '—'} | {cajaInfo.nombre_padre || cajaInfo.nombre_madre || 'Sin titular'}
+          </p>
+        )}
+      </div>
+
+      {/* Fecha de Devolución */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha devolución</label>
+        <input
+          type="date"
+          value={cajaFormData.fecha_devolucion}
+          onChange={(e) => setCajaFormData(prev => ({ ...prev, fecha_devolucion: e.target.value }))}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        />
+      </div>
+    </>
+    )}
+
+    {/* === FILA: Estado (solo servicio) + Formas de Pago === */}
+    {/* Estado — solo en modo servicio */}
+    {!modoCaja && (
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estado</label>
       <select
@@ -1121,9 +1409,10 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
         ))}
       </select>
     </div>
+    )}
 
-    {/* Forma de Pago */}
-    <div className="col-span-2">
+    {/* Formas de Pago — ocupa 3 cols (servicio) o 4 cols (caja) */}
+    <div className={`sm:col-span-2 ${modoCaja ? 'lg:col-span-4' : 'lg:col-span-3'}`}>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
         Formas de Pago <span className="text-red-500">*</span>
       </label>
@@ -1191,8 +1480,8 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       </div>
     </div>
 
-    {/* Checkbox imprimir ticket */}
-    <div className="col-span-2">
+    {/* Checkbox imprimir ticket — full width */}
+    <div className="sm:col-span-2 lg:col-span-4">
       <label className="flex items-center space-x-2 cursor-pointer">
         <input
           type="checkbox"
@@ -1206,7 +1495,6 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
       </label>
     </div>
 
-
     {/* Campos de operación si ≠ efectivo */}
     {pagos.some(p => {
     const m = metodosPago.find(mp => String(mp.id) === String(p.metodo_pago_id));
@@ -1214,7 +1502,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
     }) && (
       <>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha de operación</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha operación</label>
           <input
             type="date"
             value={formData.fecha_operacion || ''}
@@ -1223,7 +1511,7 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hora de operación</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hora operación</label>
           <input
             type="time"
             value={formData.hora_operacion || ''}
@@ -1231,24 +1519,24 @@ const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
           />
         </div>
-        <div className="md:col-span-2">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° de operación</label>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° operación</label>
           <input
             type="text"
             value={formData.nro_operacion || ''}
             onChange={(e) => setFormData(prev => ({ ...prev, nro_operacion: e.target.value }))}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            placeholder="Código / referencia de la operación"
+            placeholder="Código / referencia"
           />
         </div>
-        <div className="md:col-span-2">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Obs. de la operación</label>
-          <textarea
-            rows={2}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Obs. operación</label>
+          <input
+            type="text"
             value={formData.obs_operacion || ''}
             onChange={(e) => setFormData(prev => ({ ...prev, obs_operacion: e.target.value }))}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            placeholder="Notas adicionales del pago"
+            placeholder="Notas del pago"
           />
         </div>
       </>

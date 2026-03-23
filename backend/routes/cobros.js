@@ -32,9 +32,11 @@ async function generarCorrelativo(serie = 'T001') {
 /**
  * Asegurar cliente (busca por DNI o crea nuevo)
  */
-async function ensureCliente(connection, nombre, dni = '') {
+async function ensureCliente(connection, nombre, dni = '', telefono = '', email = '') {
   const nom = String(nombre).trim();
   const doc = String(dni || '').trim();
+  const tel = String(telefono || '').trim();
+  const mail = String(email || '').trim();
 
   if (!nom) throw new Error('Nombre requerido');
   if (nom.length > 100) throw new Error('Nombre demasiado largo');
@@ -45,22 +47,45 @@ async function ensureCliente(connection, nombre, dni = '') {
   // 1) Si viene DNI, buscar por DNI
   if (doc) {
     const [r1] = await connection.query('SELECT id FROM clientes WHERE dni = ? LIMIT 1', [doc]);
-    if (r1.length) return r1[0].id;
+    if (r1.length) {
+      // Actualizar telefono/email si vienen
+      if (tel || mail) {
+        const sets = []; const vals = [];
+        if (tel) { sets.push('telefono = ?'); vals.push(tel); }
+        if (mail) { sets.push('email = ?'); vals.push(mail); }
+        if (sets.length) {
+          vals.push(r1[0].id);
+          await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
+        }
+      }
+      return r1[0].id;
+    }
   }
 
   // 2) Buscar por nombre exacto
   const [r2] = await connection.query('SELECT id FROM clientes WHERE nombre = ? LIMIT 1', [nom]);
-  if (r2.length) return r2[0].id;
+  if (r2.length) {
+    // Actualizar telefono/email si vienen
+    if (tel || mail) {
+      const sets = []; const vals = [];
+      if (tel) { sets.push('telefono = ?'); vals.push(tel); }
+      if (mail) { sets.push('email = ?'); vals.push(mail); }
+      if (sets.length) {
+        vals.push(r2[0].id);
+        await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
+      }
+    }
+    return r2[0].id;
+  }
 
   // 3) Crear nuevo
   try {
     const [ins] = await connection.execute(
-      'INSERT INTO clientes (nombre, dni, activo) VALUES (?, ?, 1)',
-      [nom, doc || null]
+      'INSERT INTO clientes (nombre, dni, telefono, email, activo) VALUES (?, ?, ?, ?, 1)',
+      [nom, doc || null, tel || null, mail || null]
     );
     return ins.insertId;
   } catch (e) {
-    // Si chocó por DNI duplicado, devolver el existente
     if (e && e.code === 'ER_DUP_ENTRY' && doc) {
       const [r3] = await connection.query('SELECT id FROM clientes WHERE dni = ? LIMIT 1', [doc]);
       if (r3.length) return r3[0].id;
@@ -74,14 +99,65 @@ async function ensureCliente(connection, nombre, dni = '') {
 // ===================================================================
 
 /**
+ * GET /api/cobros/consultar-dni/:dni
+ * Proxy para consultar DNI en apis.net.pe (evita CORS del navegador)
+ */
+router.get('/consultar-dni/:dni', authenticateToken, async (req, res) => {
+  try {
+    const { dni } = req.params;
+    const proveedor = req.query.proveedor || 'apisnetpe';
+
+    if (!/^\d{8}$/.test(dni)) {
+      return res.status(400).json({ success: false, error: 'DNI debe tener 8 dígitos' });
+    }
+
+    let url, headers;
+
+    if (proveedor === 'apisnetpe') {
+      const token = process.env.APISNETPE_TOKEN || 'apis-token-5978.vALeomBsDdA-LujBZkqcczBrKxI1CBp6';
+      url = `https://api.apis.net.pe/v2/reniec/dni?numero=${dni}`;
+      headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/json' };
+    } else {
+      return res.status(400).json({ success: false, error: 'Proveedor no soportado en proxy' });
+    }
+
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ success: false, error: `Error ${response.status} desde API externa` });
+    }
+
+    const data = await response.json();
+    const nombres = data.nombres || '';
+    const apPat = data.apellidoPaterno || '';
+    const apMat = data.apellidoMaterno || '';
+
+    res.json({
+      success: true,
+      data: {
+        dni: data.dni || dni,
+        nombres,
+        apellidoPaterno: apPat,
+        apellidoMaterno: apMat,
+        nombreCompleto: `${nombres} ${apPat} ${apMat}`.trim()
+      }
+    });
+  } catch (error) {
+    console.error('Proxy consultar-dni:', error);
+    res.status(500).json({ success: false, error: error.message || 'Error consultando DNI' });
+  }
+});
+
+/**
  * POST /api/cobros/ensure-cliente
  * Asegurar cliente por nombre/dni y devolver su id
  */
 router.post('/ensure-cliente', authenticateToken, authorizePermission('registrar-servicios.crear'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const { nombre = '', dni = '' } = req.body || {};
-    const cliente_id = await ensureCliente(connection, nombre, dni);
+    const { nombre = '', dni = '', telefono = '', email = '' } = req.body || {};
+    const cliente_id = await ensureCliente(connection, nombre, dni, telefono, email);
     res.json({ success: true, data: { id: cliente_id } });
   } catch (error) {
     console.error('ensure-cliente:', error);
@@ -106,6 +182,8 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
       caja_id = null, 
       cliente_nombre,
       cliente_dni = '',
+      cliente_telefono = '',
+      cliente_email = '',
       concepto, 
       monto, 
       pagos = [], // Array de { metodo_pago_id, monto }
@@ -142,7 +220,7 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
     }
 
     // Asegurar cliente
-    const cliente_id = await ensureCliente(connection, cliente_nombre, cliente_dni);
+    const cliente_id = await ensureCliente(connection, cliente_nombre, cliente_dni, cliente_telefono, cliente_email);
 
     // Generar serie y correlativo
     const serie = 'T001'; // Puedes hacerlo configurable
@@ -269,12 +347,12 @@ router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.l
 
 /**
  * GET /api/cobros/:id/ticket
- * Generar ticket PDF 80mm según modelo
+ * Generar ticket PDF 80mm — diseño profesional con QR
  */
 router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-servicios.leer'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { hideCliente = '1' } = req.query;
+    const { hideCliente = '0' } = req.query;
 
     // Obtener cobro con todos los datos
     const [rows] = await pool.query(`
@@ -282,6 +360,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
         co.*, 
         cl.nombre as cliente_nombre, 
         cl.dni as cliente_dni,
+        cl.telefono as cliente_telefono,
         comp.serie,
         comp.correlativo,
         comp.numero as numero_comprobante,
@@ -309,79 +388,174 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       WHERE cp.cobro_id = ?
     `, [id]);
 
-    // Obtener texto footer de configuración
-    const [config] = await pool.query(`
-      SELECT valor FROM configuracion_sistema WHERE clave = 'ticket_footer_text'
-    `);
+    // Footer configurable
+    const [config] = await pool.query(
+      `SELECT valor FROM configuracion_sistema WHERE clave = 'ticket_footer_text'`
+    );
     const footerText = config[0]?.valor || 'Gracias por su preferencia';
 
-    // Generar PDF (80mm = 226.77pt)
-    const doc = new PDFDocument({ 
-      size: [226.77, 600], 
-      margins: { top: 10, bottom: 10, left: 10, right: 10 }
+    // Generar QR con datos relevantes
+    const QRCode = require('qrcode');
+    const qrData = JSON.stringify({
+      ticket: cobro.numero_comprobante,
+      fecha: cobro.fecha_cobro,
+      monto: Number(cobro.monto).toFixed(2),
+      concepto: cobro.concepto || '',
+    });
+    const qrImageBuffer = await QRCode.toBuffer(qrData, {
+      width: 120,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    });
+
+    // PDF 80mm = 226.77pt
+    const W = 226.77;
+    const M = 10; // margen lateral
+    const CW = W - M * 2; // content width
+
+    const doc = new PDFDocument({
+      size: [W, 700],
+      margins: { top: 10, bottom: 10, left: M, right: M }
     });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=ticket_${cobro.numero_comprobante}.pdf`);
     doc.pipe(res);
 
-    // === HEADER ===
-    doc.fontSize(11).text('PARROQUIA N.S. DE LA RECONCILIACIÓN', { align: 'center' });
-    doc.fontSize(8).text('CABILDO METROPOLITANO DE LIMA - RUC: 20177176771', { align: 'center' });
-    doc.fontSize(8).text('JR.CARABAYA S/N, PLAZA DE ARMAS DE LIMA - LIMA', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(9).text(`Nº TICKET: ${cobro.numero_comprobante}`, { align: 'center' });
+    // ═══════════ HEADER ═══════════
+    doc.fontSize(10).font('Helvetica-Bold')
+       .text('PARROQUIA N.S.', { align: 'center' });
+    doc.fontSize(9).font('Helvetica-Bold')
+       .text('DE LA RECONCILIACIÓN', { align: 'center' });
+    doc.moveDown(0.15);
+    doc.fontSize(6.5).font('Helvetica')
+       .text('Cabildo Metropolitano de Lima', { align: 'center' });
+    doc.fontSize(6.5)
+       .text('RUC: 20177176771', { align: 'center' });
+    doc.fontSize(6)
+       .text('Jr. Carabaya S/N, Plaza de Armas - Lima', { align: 'center' });
+
+    // Línea doble
+    doc.moveDown(0.4);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(1.5).stroke();
+    doc.moveDown(0.1);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
     doc.moveDown(0.3);
 
-    // Fecha y hora
+    // ═══════════ TIPO DE DOCUMENTO ═══════════
+    const esCaja = cobro.caja_id && !cobro.servicio_id;
+    doc.fontSize(9).font('Helvetica-Bold')
+       .text(esCaja ? 'COMPROBANTE - CAJA DEL AMOR' : 'COMPROBANTE DE SERVICIO', { align: 'center' });
+    doc.moveDown(0.15);
+    doc.fontSize(8).font('Helvetica-Bold')
+       .text(`N° ${cobro.numero_comprobante}`, { align: 'center' });
+    doc.moveDown(0.3);
+
+    // ═══════════ FECHA / HORA ═══════════
     const fecha = new Date(cobro.fecha_cobro || Date.now());
-    doc.fontSize(8).text(
-      `FECHA: ${fecha.toLocaleDateString('es-PE')}   HORA: ${fecha.toLocaleTimeString('es-PE')}`, 
-      { align: 'center' }
-    );
-    doc.moveDown(0.5);
+    const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
-    // === ITEMS ===
-    doc.fontSize(8);
-    const yItems = doc.y;
-    doc.text('ITEM', 10, yItems);
-    doc.text('CANT', 130, yItems);
-    doc.text('P.UNIT', 165, yItems);
-    doc.text('SUBTOTAL', 190, yItems);
-    doc.moveDown(0.3);
-    doc.moveTo(10, doc.y).lineTo(216, doc.y).stroke();
-    doc.moveDown(0.2);
+    doc.fontSize(7.5).font('Helvetica');
+    const yFecha = doc.y;
+    doc.text(`Fecha: ${fechaStr}`, M, yFecha);
+    doc.text(`Hora: ${horaStr}`, M + CW / 2, yFecha);
+    doc.moveDown(0.4);
 
-    // Item único
-    const yItem = doc.y;
-    doc.text(cobro.concepto || 'Servicio', 10, yItem, { width: 110 });
-    doc.text('1', 130, yItem);
-    doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, 165, yItem);
-    doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, 190, yItem);
-
-    doc.moveDown(1);
-
-    // === PAGOS ===
-    pagos.forEach(pago => {
-      doc.fontSize(8).text(`${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, { align: 'left' });
-    });
-
-    doc.moveDown(0.5);
-    doc.fontSize(11).text(`TOTAL: S/ ${Number(cobro.monto).toFixed(2)}`, { align: 'right' });
-    
-    // Cliente (opcional)
+    // ═══════════ CLIENTE / BENEFACTOR ═══════════
     const mostrarCliente = hideCliente !== '1';
-    if (mostrarCliente && cobro.cliente_nombre) {
+    if (mostrarCliente || esCaja) {
+      doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
+      doc.undash();
+      doc.moveDown(0.2);
+
+      doc.fontSize(7.5).font('Helvetica-Bold')
+         .text(esCaja ? 'BENEFACTOR:' : 'CLIENTE:', M);
+      doc.fontSize(7.5).font('Helvetica')
+         .text(cobro.cliente_nombre || '—', M);
+      if (cobro.cliente_dni) {
+        doc.text(`DNI: ${cobro.cliente_dni}`, M);
+      }
       doc.moveDown(0.3);
-      doc.fontSize(8).text(
-        `CLIENTE: ${cobro.cliente_nombre}${cobro.cliente_dni ? ' (DNI ' + cobro.cliente_dni + ')' : ''}`, 
-        { align: 'left' }
-      );
     }
 
-    // === FOOTER ===
-    doc.moveDown(1);
-    doc.fontSize(7).text(footerText, { align: 'center', width: 206 });
+    // ═══════════ DETALLE ═══════════
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
+    doc.moveDown(0.2);
+
+    // Header tabla
+    doc.fontSize(7).font('Helvetica-Bold');
+    const yTH = doc.y;
+    doc.text('DESCRIPCIÓN', M, yTH, { width: CW * 0.55 });
+    doc.text('CANT', M + CW * 0.58, yTH, { width: 30, align: 'center' });
+    doc.text('TOTAL', M + CW * 0.75, yTH, { width: CW * 0.25, align: 'right' });
+    doc.moveDown(0.2);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
+    doc.moveDown(0.15);
+
+    // Item
+    doc.fontSize(7).font('Helvetica');
+    const yItem = doc.y;
+    doc.text(cobro.concepto || 'Servicio', M, yItem, { width: CW * 0.55 });
+    doc.text('1', M + CW * 0.58, yItem, { width: 30, align: 'center' });
+    doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M + CW * 0.75, yItem, { width: CW * 0.25, align: 'right' });
+
+    doc.moveDown(0.5);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
+    doc.moveDown(0.3);
+
+    // ═══════════ TOTAL ═══════════
+    doc.fontSize(11).font('Helvetica-Bold');
+    const yTotal = doc.y;
+    doc.text('TOTAL:', M, yTotal);
+    doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M, yTotal, { width: CW, align: 'right' });
+    doc.moveDown(0.4);
+
+    // ═══════════ FORMAS DE PAGO ═══════════
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
+    doc.undash();
+    doc.moveDown(0.2);
+
+    doc.fontSize(7).font('Helvetica-Bold').text('FORMA(S) DE PAGO:', M);
+    doc.moveDown(0.1);
+    doc.font('Helvetica');
+    pagos.forEach(pago => {
+      doc.fontSize(7).text(`  • ${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, M);
+    });
+
+    // Observaciones
+    if (cobro.observaciones) {
+      doc.moveDown(0.3);
+      doc.fontSize(6.5).font('Helvetica-Oblique')
+         .text(`Obs: ${cobro.observaciones}`, M, doc.y, { width: CW });
+    }
+
+    // ═══════════ QR CODE ═══════════
+    doc.moveDown(0.5);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
+    doc.moveDown(0.3);
+
+    const qrSize = 70;
+    const qrX = (W - qrSize) / 2;
+    doc.image(qrImageBuffer, qrX, doc.y, { width: qrSize, height: qrSize });
+    doc.y += qrSize + 3;
+    doc.fontSize(5.5).font('Helvetica')
+       .text('Escanee para verificar', { align: 'center' });
+
+    // ═══════════ FOOTER ═══════════
+    doc.moveDown(0.4);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(1.5).stroke();
+    doc.moveDown(0.1);
+    doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
+    doc.moveDown(0.3);
+
+    doc.fontSize(7).font('Helvetica-Bold')
+       .text(footerText, { align: 'center', width: CW });
+    doc.moveDown(0.15);
+    doc.fontSize(5.5).font('Helvetica')
+       .text('Documento sin efectos legales del sistema', { align: 'center' });
+    doc.fontSize(5.5)
+       .text('jurídico nacional (Canon 222 §1 CDC)', { align: 'center' });
 
     doc.end();
 

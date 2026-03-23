@@ -315,6 +315,146 @@ const ReporteGeneral = () => {
   );
 };
 
+// ═══════════════════ 3b. PAGOS DE CAJAS DEL AMOR ═══════════════════
+const PagosCajasReporte = () => {
+  const [rows, setRows] = useState([]);
+  const [formasPago, setFormasPago] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [count, setCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [fDesde, setFDesde] = useState('');
+  const [fHasta, setFHasta] = useState('');
+  const [fFormaPago, setFFormaPago] = useState('');
+  const [fBuscar, setFBuscar] = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (fDesde) p.set('desde', fDesde);
+    if (fHasta) p.set('hasta', fHasta);
+    if (fFormaPago) p.set('forma_pago', fFormaPago);
+    if (fBuscar) p.set('buscar', fBuscar);
+    const r = await get(`/reportes/pagos-cajas?${p}`);
+    if (r.success) {
+      setRows(r.data);
+      setTotal(r.total || 0);
+      setCount(r.count || 0);
+      if (r.formas_pago) setFormasPago(r.formas_pago);
+    }
+    setLoading(false);
+  }, [fDesde, fHasta, fFormaPago, fBuscar]);
+
+  useEffect(() => { fetchData(); }, []);
+
+  const promedio = count > 0 ? total / count : 0;
+
+  const handleExport = () => exportXlsx(rows.map(r => ({
+    'Fecha Pago': fmtDate(r.fecha_pago),
+    'N° Recibo': r.recibo || '',
+    'Benefactor': r.benefactor_nombre || '',
+    'DNI': r.benefactor_dni || '',
+    'Teléfono': r.benefactor_telefono || '',
+    'Email': r.benefactor_email || '',
+    'Modalidad': r.modalidad || '',
+    'Código(s) Caja': r.codigos_cajas || '',
+    'Forma de Pago': r.forma_pago || '',
+    'Monto': Number(r.monto || 0),
+    'Fec. Operación': fmtDate(r.fecha_operacion),
+    'Hora Operación': r.hora_operacion || '',
+    'N° Operación': r.nro_operacion || '',
+    'Obs. Operación': r.obs_operacion || '',
+  })), 'Pagos_Cajas_Amor');
+
+  return (
+    <div>
+      {/* Cards resumen */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+        <Card label="Total Recaudado" value={fmtMoney(total)} color="green" />
+        <Card label="N° de Pagos" value={count} color="blue" />
+        <Card label="Promedio por Pago" value={fmtMoney(promedio)} color="purple" />
+      </div>
+
+      {/* Filtros */}
+      <div className="flex flex-wrap gap-3 mb-4 items-end">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Desde</label>
+          <input type="date" value={fDesde} onChange={e => setFDesde(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Hasta</label>
+          <input type="date" value={fHasta} onChange={e => setFHasta(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white" />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Forma de pago</label>
+          <select value={fFormaPago} onChange={e => setFFormaPago(e.target.value)}
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white">
+            <option value="">Todas</option>
+            {formasPago.map(fp => <option key={fp} value={fp}>{fp}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Buscar</label>
+          <input type="text" value={fBuscar} onChange={e => setFBuscar(e.target.value)}
+            placeholder="Benefactor, recibo, caja..."
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white w-48" />
+        </div>
+        <button onClick={fetchData} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Filtrar</button>
+        <button onClick={() => { setFDesde(''); setFHasta(''); setFFormaPago(''); setFBuscar(''); setTimeout(fetchData, 50); }}
+          className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
+        <div className="flex-1" />
+        <ExportBtn onClick={handleExport} disabled={!rows.length} />
+      </div>
+
+      <div className="text-xs text-gray-500 mb-2">{rows.length} pago(s) | Total: <span className="font-semibold text-green-700">{fmtMoney(total)}</span></div>
+
+      {/* Tabla */}
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 dark:bg-gray-700">
+            <tr>
+              {['Fecha Pago','N° Recibo','Benefactor','DNI','Teléfono','Modalidad','Caja(s)','Forma Pago','Monto','Fec. Operación','Hora Op.','N° Operación','Obs. Operación'].map(h =>
+                <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y dark:divide-gray-600">
+            {loading && <tr><td colSpan={13} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={13} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {!loading && rows.map(r => (
+              <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_pago)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.recibo || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_nombre || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_dni || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.benefactor_telefono || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">
+                  <span className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                    {r.modalidad || '—'}
+                  </span>
+                </td>
+                <td className="px-3 py-2 dark:text-white text-xs">{r.codigos_cajas || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${
+                    (r.forma_pago || '').toLowerCase() === 'efectivo'
+                      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                      : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                  }`}>{r.forma_pago || '—'}</span>
+                </td>
+                <td className="px-3 py-2 dark:text-white font-medium whitespace-nowrap">{fmtMoney(r.monto)}</td>
+                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_operacion)}</td>
+                <td className="px-3 py-2 dark:text-white">{r.hora_operacion || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.nro_operacion || '—'}</td>
+                <td className="px-3 py-2 dark:text-white text-xs max-w-xs truncate">{r.obs_operacion || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 // ═══════════════════ 4. SERVICIOS PARROQUIALES ═══════════════════
 const ServiciosReporte = () => {
   const [rows, setRows] = useState([]);
@@ -509,12 +649,13 @@ export default function Reportes() {
       {mainTab === 'cajas' && (
         <div>
           <SubTabs
-            tabs={[{ id: 'seguimiento', label: 'Seguimiento de Cajas' }, { id: 'beneficiados', label: 'Info. Beneficiados' }, { id: 'general', label: 'Reporte General' }]}
+            tabs={[{ id: 'seguimiento', label: 'Seguimiento de Cajas' }, { id: 'beneficiados', label: 'Info. Beneficiados' }, { id: 'general', label: 'Reporte General' }, { id: 'pagos', label: 'Pagos' }]}
             active={cajasTab} onChange={setCajasTab} />
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-5">
             {cajasTab === 'seguimiento' && <SeguimientoCajas />}
             {cajasTab === 'beneficiados' && <Beneficiados />}
             {cajasTab === 'general' && <ReporteGeneral />}
+            {cajasTab === 'pagos' && <PagosCajasReporte />}
           </div>
         </div>
       )}

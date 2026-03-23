@@ -111,6 +111,80 @@ router.get('/general', authenticateToken, authorizePermission('reportes'), async
   } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
 });
 
+// ══════════════ 3b. PAGOS DE CAJAS DEL AMOR ══════════════
+router.get('/pagos-cajas', authenticateToken, authorizePermission('reportes'), async (req, res) => {
+  try {
+    const desde = (req.query.desde || '').trim();
+    const hasta = (req.query.hasta || '').trim();
+    const forma_pago = (req.query.forma_pago || '').trim();
+    const buscar = (req.query.buscar || '').trim();
+
+    const w = [], a = [];
+    if (desde) { w.push(`vp.fecha >= ?`); a.push(desde); }
+    if (hasta) { w.push(`vp.fecha <= ?`); a.push(hasta); }
+    if (forma_pago) { w.push(`vp.forma_pago = ?`); a.push(forma_pago); }
+    if (buscar) {
+      w.push(`(b.nombre LIKE ? OR b.dni LIKE ? OR v.recibo LIKE ? OR c_cod.codigo LIKE ?)`);
+      a.push(`%${buscar}%`, `%${buscar}%`, `%${buscar}%`, `%${buscar}%`);
+    }
+    const wSQL = w.length ? `WHERE ${w.join(' AND ')}` : '';
+
+    const [rows] = await pool.query(`
+      SELECT 
+        vp.id,
+        vp.fecha AS fecha_pago,
+        vp.forma_pago,
+        vp.monto,
+        vp.moneda,
+        vp.fecha_operacion,
+        vp.hora_operacion,
+        vp.nro_operacion,
+        vp.obs_operacion,
+        v.id AS venta_id,
+        v.recibo,
+        v.fecha AS fecha_venta,
+        v.estado,
+        cm.nombre AS modalidad,
+        b.nombre AS benefactor_nombre,
+        b.dni AS benefactor_dni,
+        b.telefono AS benefactor_telefono,
+        b.email AS benefactor_email,
+        GROUP_CONCAT(DISTINCT c_cod.codigo ORDER BY c_cod.codigo SEPARATOR ', ') AS codigos_cajas
+      FROM ventas_pagos vp
+      JOIN ventas v ON v.id = vp.venta_id
+      LEFT JOIN benefactores b ON b.id = v.benefactor_id
+      LEFT JOIN campania_modalidades cm ON cm.id = v.modalidad_id
+      LEFT JOIN ventas_cajas vc ON vc.benefactor_id = v.benefactor_id AND vc.fecha = v.fecha
+      LEFT JOIN cajas c_cod ON c_cod.id = vc.caja_id
+      ${wSQL}
+      GROUP BY vp.id, vp.fecha, vp.forma_pago, vp.monto, vp.moneda,
+        vp.fecha_operacion, vp.hora_operacion, vp.nro_operacion, vp.obs_operacion,
+        v.id, v.recibo, v.fecha, v.estado, cm.nombre,
+        b.nombre, b.dni, b.telefono, b.email
+      ORDER BY vp.fecha DESC, vp.id DESC
+    `, a);
+
+    const total = rows.reduce((s, r) => s + Number(r.monto || 0), 0);
+    const count = rows.length;
+
+    // Formas de pago distintas para filtro
+    const [formasPago] = await pool.query(`
+      SELECT DISTINCT forma_pago FROM ventas_pagos WHERE forma_pago IS NOT NULL ORDER BY forma_pago
+    `);
+
+    res.json({
+      success: true,
+      data: rows,
+      total,
+      count,
+      formas_pago: formasPago.map(f => f.forma_pago),
+    });
+  } catch (e) {
+    console.error('GET /reportes/pagos-cajas:', e);
+    res.status(500).json({ success: false, error: 'Error interno' });
+  }
+});
+
 // ══════════════ 4. SERVICIOS PARROQUIALES ══════════════
 router.get('/servicios', authenticateToken, authorizePermission('reportes'), async (req, res) => {
   try {

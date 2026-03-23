@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import RolesPermisosTab from '../components/Configuracion/RolesPermisosTab';
 import GeneralConfigTab from '../components/Configuracion/GeneralConfigTab';
+import BackupTab from '../components/Configuracion/BackupTab';
 
 const Configuracion = () => {
   const [activeTab, setActiveTab] = useState('roles');
@@ -9,6 +10,7 @@ const Configuracion = () => {
   const tabs = [
     { id: 'roles', name: 'Roles y Permisos', icon: '🔐' },
     { id: 'general', name: 'Configuración General', icon: '⚙️' },
+    { id: 'backup', name: 'Backup', icon: '💾' },
   ];
 
   return (
@@ -51,6 +53,7 @@ const Configuracion = () => {
         <div className="p-6">
           {activeTab === 'roles' && <RolesPermisosTab />}
           {activeTab === 'general' && <GeneralConfigTab />}
+          {activeTab === 'backup' && <BackupTab />}
         </div>
       </div>
     </div>

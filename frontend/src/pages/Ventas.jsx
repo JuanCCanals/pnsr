@@ -291,7 +291,7 @@ export default function Ventas() {
         Benefactor:    v.benefactor_nombre || "",
         Codigos:       v.codigos || "",
         FecDevolucion: toYMD(v.fecha_devolucion),
-        Estado:        v.estado || "",
+        Estado:        v.cajas_estado ? v.cajas_estado.split(', ').map(e => mapEstadoDB(e)).join(', ') : (v.estado || ""),
       }));
 
       await downloadExcel(
@@ -769,7 +769,7 @@ export default function Ventas() {
 
                     <td className="px-5 py-3 whitespace-nowrap">
                       <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
-                        {prettyEstado(r.estado)}
+                        {r.cajas_estado ? r.cajas_estado.split(', ').map(e => mapEstadoDB(e)).join(', ') : prettyEstado(r.estado)}
                       </span>
                     </td>
 

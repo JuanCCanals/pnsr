@@ -113,8 +113,8 @@ export const serviciosService = {
 
 // --- Cobros ---
 export const cobrosService = {
-  ensureCliente: (nombre, dni='') =>
-    api.post('/cobros/ensure-cliente', { nombre, dni }).then(r => r.data),
+  ensureCliente: (nombre, dni='', telefono='', email='') =>
+    api.post('/cobros/ensure-cliente', { nombre, dni, telefono, email }).then(r => r.data),
 
   crear: (payload) =>
     api.post('/cobros', payload).then(r => r.data),
