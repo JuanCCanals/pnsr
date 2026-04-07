@@ -26,7 +26,10 @@ function printTicket80(cobro) {
 </head>
 <body>
   <div class="t">
-    <div class="hdr">${(window.ENTIDAD_NOMBRE || 'Parroquia N.S. de la Reconciliación')}</div>
+    <div class="hdr">PARROQUIA N.S. DE LA RECONCILIACIÓN</div>
+    <div style="text-align:center; font-size:10px;">RUC: 20387535684</div>
+    <div style="text-align:center; font-size:10px;">Jr. Los Pinos 291, Urb. Camacho, La Molina</div>
+    <div class="sep"></div>
     <div style="text-align:center">N° TICKET: ${cobro.numero_comprobante}</div>
     <div style="text-align:center">
       FECHA: ${new Date(cobro.fecha_cobro || Date.now()).toLocaleDateString('es-PE')}
@@ -34,18 +37,14 @@ function printTicket80(cobro) {
     </div>
     <div class="sep"></div>
 
-    ${cobro.cliente_nombre ? `<div><b>CLIENTE:</b> ${cobro.cliente_nombre}${cobro.cliente_dni ? ' (DNI ' + cobro.cliente_dni + ')' : ''}</div>` : ''}
+    <div><b>FELIGRÉS:</b> ${cobro.cliente_nombre || '—'}</div>
+    <div><b>DNI:</b> ${cobro.cliente_dni || '—'}</div>
 
     <div class="mt4"><b>ITEM</b></div>
     <div class="row"><div>${cobro.concepto || 'Servicio'}</div><div class="right">S/ ${(Number(cobro.monto)||0).toFixed(2)}</div></div>
     <div class="sep"></div>
     <div class="row"><div><b>TOTAL</b></div><div class="right"><b>S/ ${(Number(cobro.monto)||0).toFixed(2)}</b></div></div>
     <div class="mt4">PAGO: ${cobro.metodo_pago || ''}</div>
-
-    <div class="sep"></div>
-    <div style="font-size:9px; text-align:center;">
-      ${'Documento sin efectos legales del sistema jurídico nacional (Canon 222 §1 CDC).'}
-    </div>
   </div>
   <script>window.onload = () => { window.print(); setTimeout(()=>window.close(), 300); };</script>
 </body>
@@ -243,7 +242,7 @@ const [buscandoDNI, setBuscandoDNI] = useState(false);
 const [dniApi, setDniApi] = useState('apisperu'); // 'apisperu' o 'apisnetpe'
 const [metodosPago, setMetodosPago] = useState([]);
 const [pagos, setPagos] = useState([
-  { metodo_pago_id: '', monto: '' }
+  { metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }
 ]);
 const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
@@ -434,10 +433,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     }
   };
 
-  // ========== GESTIÃ“N PAGOS MÃšLTIPLES ==========
+  // ========== GESTIÓN PAGOS MÚLTIPLES ==========
   const agregarPago = () => {
     if (pagos.length < 2) {
-      setPagos([...pagos, { metodo_pago_id: '', monto: '' }]);
+      setPagos([...pagos, { metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     }
   };
 
@@ -522,6 +521,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       // MODO CAJA DEL AMOR
       // ============================================================
       if (modoCaja) {
+        if (editingServicio) {
+          setLoading(false);
+          return setErrors({ general: 'La edición de ventas de Caja del Amor no está soportada desde este módulo. Use el módulo Gestión.' });
+        }
         // Validaciones específicas de caja
         if (!cajaFormData.modalidad_id) {
           return setErrors({ general: 'Seleccione la modalidad de caja.' });
@@ -531,6 +534,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         }
         if (!cajaInfo) {
           return setErrors({ general: 'Busque y seleccione un código de caja válido.' });
+        }
+        // Para modalidad S/40, fecha de devolución es obligatoria
+        if (Number(cajaFormData.modalidad_id) === 1 && !cajaFormData.fecha_devolucion) {
+          return setErrors({ general: 'Ingrese la fecha de devolución de la caja.' });
         }
 
         // Nombre dividido para benefactor
@@ -560,14 +567,18 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
             correo: formData.cliente_email?.trim() || '',
           },
           codigos: [cajaInfo.caja_codigo || cajaInfo.familia_codigo],
-          pagos: pagos.map(p => ({
-            forma_pago: metodosPago.find(m => String(m.id) === String(p.metodo_pago_id))?.nombre || 'Efectivo',
-            monto: parseFloat(p.monto),
-            fecha_operacion: formData.fecha_operacion || null,
-            hora_operacion: formData.hora_operacion || null,
-            nro_operacion: formData.nro_operacion || null,
-            obs_operacion: formData.obs_operacion || null,
-          })),
+          pagos: pagos.map(p => {
+            const metodoNombre = metodosPago.find(m => String(m.id) === String(p.metodo_pago_id))?.nombre || 'Efectivo';
+            const esEfectivo = metodoNombre.toLowerCase() === 'efectivo';
+            return {
+              forma_pago: metodoNombre,
+              monto: parseFloat(p.monto),
+              fecha_operacion: !esEfectivo ? (p.fecha_operacion || null) : null,
+              hora_operacion: !esEfectivo ? (p.hora_operacion || null) : null,
+              nro_operacion: !esEfectivo ? (p.nro_operacion || null) : null,
+              obs_operacion: !esEfectivo ? (p.obs_operacion || null) : null,
+            };
+          }),
         };
 
         const ventaResp = await ventasService.registrar(ventaPayload);
@@ -587,14 +598,18 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           cliente_email: formData.cliente_email?.trim() || '',
           concepto: `Caja del Amor: ${modLabel}`,
           monto: parseFloat(formData.precio),
-          pagos: pagos.map(p => ({
-            metodo_pago_id: parseInt(p.metodo_pago_id),
-            monto: parseFloat(p.monto),
-            fecha_operacion: formData.fecha_operacion || null,
-            hora_operacion: formData.hora_operacion || null,
-            nro_operacion: formData.nro_operacion || null,
-            obs_operacion: formData.obs_operacion || null,
-          })),
+          pagos: pagos.map(p => {
+            const metodoNombre = metodosPago.find(m => String(m.id) === String(p.metodo_pago_id))?.nombre || '';
+            const esEfectivo = metodoNombre.toLowerCase() === 'efectivo';
+            return {
+              metodo_pago_id: parseInt(p.metodo_pago_id),
+              monto: parseFloat(p.monto),
+              fecha_operacion: !esEfectivo ? (p.fecha_operacion || null) : null,
+              hora_operacion: !esEfectivo ? (p.hora_operacion || null) : null,
+              nro_operacion: !esEfectivo ? (p.nro_operacion || null) : null,
+              obs_operacion: !esEfectivo ? (p.obs_operacion || null) : null,
+            };
+          }),
           observaciones: formData.observaciones || null
         };
 
@@ -610,9 +625,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         }
 
       // ============================================================
-      // MODO SERVICIO ECLESIÁSTICO (flujo original)
+      // MODO SERVICIO ECLESIÁSTICO
       // ============================================================
       } else {
+        // Asegurar / actualizar cliente (upsert por DNI)
         const clienteId = await ensureCliente(
           formData.cliente_nombre.trim(),
           (formData.cliente_dni || '').trim(),
@@ -620,53 +636,104 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           (formData.cliente_email || '').trim()
         );
 
-        const servicioPayload = {
-          tipo_servicio_id: Number(formData.tipo_servicio_id),
-          cliente_id: clienteId,
-          fecha_servicio: formData.fecha_servicio,
-          hora_servicio: formData.hora_servicio,
-          precio: parseFloat(formData.precio),
-          estado: 'programado',
-          observaciones: formData.observaciones || null
-        };
-
-        const servicioResp = await crearServicio(servicioPayload);
-        if (!servicioResp.success) {
-          throw new Error(servicioResp.message || 'Error al crear servicio');
-        }
-
-        const servicio_id = servicioResp.data.id;
         const tipoLabel = tiposServicio.find(t => t.value === Number(formData.tipo_servicio_id))?.label || 'Servicio';
 
-        const cobroPayload = {
-          servicio_id,
-          caja_id: null,
-          cliente_nombre: formData.cliente_nombre.trim(),
-          cliente_dni: formData.cliente_dni?.trim() || '',
-          cliente_telefono: formData.cliente_telefono?.trim() || '',
-          cliente_email: formData.cliente_email?.trim() || '',
-          concepto: `Servicio: ${tipoLabel}`,
-          monto: parseFloat(formData.precio),
-          pagos: pagos.map(p => ({
+        // Construir pagos normalizados para enviar
+        const pagosPayload = pagos.map(p => {
+          const metodoNombre = metodosPago.find(m => String(m.id) === String(p.metodo_pago_id))?.nombre || '';
+          const esEfectivo = metodoNombre.toLowerCase() === 'efectivo';
+          return {
             metodo_pago_id: parseInt(p.metodo_pago_id),
             monto: parseFloat(p.monto),
-            fecha_operacion: formData.fecha_operacion || null,
-            hora_operacion: formData.hora_operacion || null,
-            nro_operacion: formData.nro_operacion || null,
-            obs_operacion: formData.obs_operacion || null,
-          })),
-          observaciones: formData.observaciones || null
-        };
+            fecha_operacion: !esEfectivo ? (p.fecha_operacion || null) : null,
+            hora_operacion: !esEfectivo ? (p.hora_operacion || null) : null,
+            nro_operacion: !esEfectivo ? (p.nro_operacion || null) : null,
+            obs_operacion: !esEfectivo ? (p.obs_operacion || null) : null,
+          };
+        });
 
-        const cobroData = await cobrosService.crear(cobroPayload);
-        if (!cobroData.success) {
-          throw new Error(cobroData.error || 'Error al crear cobro');
-        }
+        if (editingServicio) {
+          // -------- UPDATE: actualizar servicio existente y su cobro --------
+          const servicioPayload = {
+            tipo_servicio_id: Number(formData.tipo_servicio_id),
+            cliente_id: clienteId,
+            fecha_servicio: formData.fecha_servicio,
+            hora_servicio: formData.hora_servicio,
+            precio: parseFloat(formData.precio),
+            estado: formData.estado || 'programado',
+            observaciones: formData.observaciones || null
+          };
 
-        setSuccessMessage('Servicio y cobro registrados exitosamente');
+          const servicioResp = await actualizarServicio(editingServicio.id, servicioPayload);
+          if (!servicioResp.success) {
+            throw new Error(servicioResp.message || servicioResp.error || 'Error al actualizar servicio');
+          }
 
-        if (mostrarTicketAuto && cobroData.data.cobro_id) {
-          setTimeout(() => abrirTicketPDF(cobroData.data.cobro_id), 500);
+          if (editingServicio.cobro_id) {
+            const cobroPayload = {
+              cliente_nombre: formData.cliente_nombre.trim(),
+              cliente_dni: formData.cliente_dni?.trim() || '',
+              cliente_telefono: formData.cliente_telefono?.trim() || '',
+              cliente_email: formData.cliente_email?.trim() || '',
+              concepto: `Servicio: ${tipoLabel}`,
+              monto: parseFloat(formData.precio),
+              pagos: pagosPayload,
+              observaciones: formData.observaciones || null
+            };
+
+            const cobroResp = await cobrosService.actualizar(editingServicio.cobro_id, cobroPayload);
+            if (!cobroResp.success) {
+              throw new Error(cobroResp.error || 'Error al actualizar cobro');
+            }
+          }
+
+          setSuccessMessage('Servicio actualizado exitosamente');
+
+          if (mostrarTicketAuto && editingServicio.cobro_id) {
+            setTimeout(() => abrirTicketPDF(editingServicio.cobro_id), 500);
+          }
+        } else {
+          // -------- CREATE: crear servicio + cobro + pagos + comprobante --------
+          const servicioPayload = {
+            tipo_servicio_id: Number(formData.tipo_servicio_id),
+            cliente_id: clienteId,
+            fecha_servicio: formData.fecha_servicio,
+            hora_servicio: formData.hora_servicio,
+            precio: parseFloat(formData.precio),
+            estado: 'programado',
+            observaciones: formData.observaciones || null
+          };
+
+          const servicioResp = await crearServicio(servicioPayload);
+          if (!servicioResp.success) {
+            throw new Error(servicioResp.message || 'Error al crear servicio');
+          }
+
+          const servicio_id = servicioResp.data.id;
+
+          const cobroPayload = {
+            servicio_id,
+            caja_id: null,
+            cliente_nombre: formData.cliente_nombre.trim(),
+            cliente_dni: formData.cliente_dni?.trim() || '',
+            cliente_telefono: formData.cliente_telefono?.trim() || '',
+            cliente_email: formData.cliente_email?.trim() || '',
+            concepto: `Servicio: ${tipoLabel}`,
+            monto: parseFloat(formData.precio),
+            pagos: pagosPayload,
+            observaciones: formData.observaciones || null
+          };
+
+          const cobroData = await cobrosService.crear(cobroPayload);
+          if (!cobroData.success) {
+            throw new Error(cobroData.error || 'Error al crear cobro');
+          }
+
+          setSuccessMessage('Servicio y cobro registrados exitosamente');
+
+          if (mostrarTicketAuto && cobroData.data.cobro_id) {
+            setTimeout(() => abrirTicketPDF(cobroData.data.cobro_id), 500);
+          }
         }
       }
 
@@ -678,13 +745,23 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
     } catch (error) {
       console.error('Error al enviar formulario:', error);
-      let msg = error.message || 'Error desconocido';
-      if (msg.includes('500')) msg = 'Error del servidor. Verifique los datos ingresados e intente nuevamente.';
-      else if (msg.includes('401') || msg.includes('Token')) msg = 'Sesión expirada. Por favor, inicie sesión nuevamente.';
-      else if (msg.includes('403')) msg = 'No tiene permisos para realizar esta acción.';
-      else if (msg.includes('DNI')) msg = 'El DNI ingresado no es válido. Debe tener 8 dígitos numéricos.';
-      else if (msg.includes('cliente')) msg = 'Error al registrar el cliente. Verifique nombre y DNI.';
-      else if (msg.includes('Network') || msg.includes('fetch')) msg = 'Error de conexión. Verifique su conexión a internet.';
+      // Extraer el mensaje real del backend si es un error Axios
+      let msg = '';
+      if (error.response?.data?.error) {
+        msg = error.response.data.error;
+      } else if (error.response?.data?.errors) {
+        msg = error.response.data.errors.map(e => e.message || e).join('. ');
+      } else if (error.response?.data?.message) {
+        msg = error.response.data.message;
+      } else {
+        msg = error.message || 'Error desconocido';
+      }
+      // Mensajes amigables para códigos de estado
+      const status = error.response?.status;
+      if (status === 500 && !msg.includes('suma')) msg = 'Error del servidor. Verifique los datos ingresados e intente nuevamente.';
+      else if (status === 401) msg = 'Sesión expirada. Por favor, inicie sesión nuevamente.';
+      else if (status === 403) msg = 'No tiene permisos para realizar esta acción.';
+      else if (!status && (msg.includes('Network') || msg.includes('fetch'))) msg = 'Error de conexión. Verifique su conexión a internet.';
       setErrors({ general: msg });
     } finally {
       setLoading(false);
@@ -699,7 +776,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         return;
       }
       const base = (import.meta.env.VITE_API_URL || 'http://localhost:3001/api').replace(/\/api$/, '');
-      const url = `${base}/api/cobros/${cobroId}/ticket?hideCliente=1`;
+      const url = `${base}/api/cobros/${cobroId}/ticket`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -718,8 +795,13 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
   };
 
 
-  const handleEdit = (servicio) => {
+  const handleEdit = async (servicio) => {
     setEditingServicio(servicio);
+    // Normalizar hora "HH:MM:SS" → "HH:MM" (el select usa HH:MM)
+    const horaNormalizada = servicio.hora_servicio
+      ? String(servicio.hora_servicio).slice(0, 5)
+      : '';
+
     setFormData({
       tipo_servicio_id: servicio.tipo_servicio_id || '',
       cliente_id: servicio.cliente_id || '',
@@ -727,18 +809,43 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       cliente_dni: servicio.cliente_dni || '',
       cliente_telefono: servicio.cliente_telefono || '',
       cliente_email: servicio.cliente_email || '',
-      fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0,10) : '',
-      hora_servicio: servicio.hora_servicio || '',
+      fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0, 10) : '',
+      hora_servicio: horaNormalizada,
       precio: servicio.precio ?? '',
       estado: servicio.estado || 'programado',
-      forma_pago: servicio.forma_pago || '',
-      fecha_operacion: servicio.fecha_operacion || '',
-      hora_operacion: servicio.hora_operacion || '',
-      nro_operacion: servicio.nro_operacion || '',
-      obs_operacion: servicio.obs_operacion || '',
+      forma_pago: '',
+      fecha_operacion: '',
+      hora_operacion: '',
+      nro_operacion: '',
+      obs_operacion: '',
       observaciones: servicio.observaciones || ''
     });
     setShowModal(true);
+
+    // Cargar pagos reales del cobro asociado (si existe)
+    if (servicio.cobro_id) {
+      try {
+        const resp = await cobrosService.getById(servicio.cobro_id);
+        if (resp.success && Array.isArray(resp.data?.pagos) && resp.data.pagos.length) {
+          const pagosCargados = resp.data.pagos.map(p => ({
+            metodo_pago_id: p.metodo_pago_id ? String(p.metodo_pago_id) : '',
+            monto: p.monto != null ? String(p.monto) : '',
+            fecha_operacion: p.fecha_operacion ? String(p.fecha_operacion).slice(0, 10) : '',
+            hora_operacion: p.hora_operacion ? String(p.hora_operacion).slice(0, 5) : '',
+            nro_operacion: p.nro_operacion || '',
+            obs_operacion: p.obs_operacion || '',
+          }));
+          setPagos(pagosCargados);
+        } else {
+          setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+        }
+      } catch (err) {
+        console.error('Error cargando pagos del cobro:', err);
+        setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+      }
+    } else {
+      setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+    }
   };
   
 
@@ -793,36 +900,6 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     }
   };
 
-  const handleImprimirTicket = async (servicio) => {
-    try {
-      if (!servicio.precio || Number(servicio.precio) <= 0) {
-        return setErrors({ general: 'El servicio no tiene precio válido para emitir ticket.' });
-      }
-      // Exigir forma de pago definida
-      const forma = servicio.forma_pago || formData.forma_pago || '';
-      if (!forma) {
-        return setErrors({ general: 'Seleccione la forma de pago antes de imprimir el ticket.' });
-      }
-  
-      const metodo_pago_id = resolveMetodoPagoId(formasPago, forma);
-  
-      // Concepto del ticket (línea)
-      const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
-  
-      await cobrarServicio({
-        servicio,
-        metodo_pago_id,
-        conceptoPersonalizado: concepto
-      });
-
-      const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
-      await abrirTicketCobroHtml(r.data.id, { tpl: 'familias', hideCliente: 1 });
-    } catch (e) {
-      console.error(e);
-      setErrors({ general: 'No se pudo generar el ticket.' });
-    }
-  };
-
   const resetForm = () => {
     setFormData({
       tipo_servicio_id: '',
@@ -844,7 +921,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     });
     setEditingServicio(null);
     setErrors({});
-    setPagos([{ metodo_pago_id: "", monto: "" }]);
+    setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     setMostrarTicketAuto(false);
     setModoCaja(false);
     setCajaFormData({ modalidad_id: "", punto_venta_id: "", codigo_caja: "", fecha_devolucion: "" });
@@ -900,9 +977,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       </button>}
 
 
-      {/* Mensajes */}
+      {/* Mensajes (solo cuando NO hay modal abierto) */}
       {successMessage && <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">{successMessage}</div>}
-      {errors.general   && <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">{errors.general}</div>}
+      {errors.general && !showModal && <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">{errors.general}</div>}
 
       {/* Estadísticas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -1016,29 +1093,14 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                       Editar
                     </button>}
 
-                    {/* Imprimir ticket: permitido SIEMPRE */}
+                    {/* Imprimir ticket del cobro asociado al servicio */}
                     <button
-                      onClick={async () => {
-                        try {
-                          if (!servicio.precio || Number(servicio.precio) <= 0)
-                            return setErrors({ general: 'Defina un precio válido antes de imprimir.' });
-
-                          // Tomamos forma de pago del registro o pedimos (prompt simple)
-                          let fp = servicio.forma_pago || formData.forma_pago || '';
-                          if (!fp) {
-                            fp = prompt('Forma de pago (efectivo, yape, plin, transferencia, interbancario):') || '';
-                            if (!fp) return;
-                          }
-                          const metodo_pago_id = resolveMetodoPagoId(formasPago, fp);
-                          const concepto = `Servicio: ${getTipoLabel(servicio.tipo_servicio_id)}`;
-
-                          // Registrar cobro y abrir ticket
-                          const r = await cobrarServicio({ servicio, metodo_pago_id, conceptoPersonalizado: concepto });
-                          await abrirTicketCobroHtml(r.data.id, { tpl: 'familias', hideCliente: 1 });
-                        } catch (e) {
-                          console.error(e);
-                          setErrors({ general: 'No se pudo generar el ticket.' });
+                      onClick={() => {
+                        if (!servicio.cobro_id) {
+                          setErrors({ general: 'Este servicio no tiene un cobro asociado. No es posible imprimir el ticket.' });
+                          return;
                         }
+                        abrirTicketPDF(servicio.cobro_id);
                       }}
                       className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
                       title="Imprimir ticket 80mm"
@@ -1061,17 +1123,6 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                           Cancelar
                         </button>
                       </>
-                    )}
-
-                    {/* Imprimir ticket: permitido cuando ya está realizado */}
-                    {servicio.estado === 'realizado' && (
-                      <button
-                        onClick={() => handleImprimirTicket(servicio)}
-                        className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300"
-                        title="Imprimir ticket 80mm"
-                      >
-                        Imprimir ticket
-                      </button>
                     )}
 
                     {servicio.estado !== 'realizado' && canDelete && (
@@ -1147,6 +1198,13 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                   </svg>
                 </button>
               </div>
+
+              {/* Error dentro del popup */}
+              {errors.general && (
+                <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded text-sm">
+                  {errors.general}
+                </div>
+              )}
 
               <form onSubmit={handleSubmit} className="space-y-4">
   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1241,7 +1299,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
     {/* Precio */}
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Precio (S/)</label>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Precio (S/) <span className="text-red-500">*</span></label>
       <input
         type="number"
         step="0.01"
@@ -1383,7 +1441,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
       {/* Fecha de Devolución */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha devolución</label>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha devolución <span className="text-red-500">*</span></label>
         <input
           type="date"
           value={cajaFormData.fecha_devolucion}
@@ -1417,45 +1475,95 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         Formas de Pago <span className="text-red-500">*</span>
       </label>
       
-      {pagos.map((pago, index) => (
-        <div key={index} className="flex gap-2 mb-2">
-          <select
-            value={pago.metodo_pago_id}
-            onChange={(e) => handlePagoChange(index, 'metodo_pago_id', e.target.value)}
-            required
-            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-          >
-            <option value="">Seleccionar método</option>
-            {metodosPago.map(metodo => (
-              <option key={metodo.id} value={metodo.id}>
-                {metodo.nombre}
-              </option>
-            ))}
-          </select>
-          
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            value={pago.monto}
-            onChange={(e) => handlePagoChange(index, 'monto', e.target.value)}
-            placeholder="Monto"
-            required
-            className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-          />
-          
-          {pagos.length > 1 && (
-            <button
-              type="button"
-              onClick={() => eliminarPago(index)}
-              className="px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
-              title="Eliminar forma de pago"
-            >
-              🗑️
-            </button>
-          )}
-        </div>
-      ))}
+      {pagos.map((pago, index) => {
+        const metodoSel = metodosPago.find(m => String(m.id) === String(pago.metodo_pago_id));
+        const esNoEfectivo = metodoSel && metodoSel.nombre.toLowerCase() !== 'efectivo';
+        return (
+          <div key={index} className="mb-3 p-3 border border-gray-200 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-800/40">
+            <div className="flex gap-2">
+              <select
+                value={pago.metodo_pago_id}
+                onChange={(e) => handlePagoChange(index, 'metodo_pago_id', e.target.value)}
+                required
+                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Seleccionar método</option>
+                {metodosPago.map(metodo => (
+                  <option key={metodo.id} value={metodo.id}>
+                    {metodo.nombre}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={pago.monto}
+                onChange={(e) => handlePagoChange(index, 'monto', e.target.value)}
+                placeholder="Monto"
+                required
+                className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+              />
+
+              {pagos.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => eliminarPago(index)}
+                  className="px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                  title="Eliminar forma de pago"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+
+            {/* Datos de operación por pago — solo si el método NO es efectivo */}
+            {esNoEfectivo && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Fecha operación</label>
+                  <input
+                    type="date"
+                    value={pago.fecha_operacion || ''}
+                    onChange={(e) => handlePagoChange(index, 'fecha_operacion', e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Hora operación</label>
+                  <input
+                    type="time"
+                    value={pago.hora_operacion || ''}
+                    onChange={(e) => handlePagoChange(index, 'hora_operacion', e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">N° operación</label>
+                  <input
+                    type="text"
+                    value={pago.nro_operacion || ''}
+                    onChange={(e) => handlePagoChange(index, 'nro_operacion', e.target.value)}
+                    placeholder="Código / referencia"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Obs. operación</label>
+                  <input
+                    type="text"
+                    value={pago.obs_operacion || ''}
+                    onChange={(e) => handlePagoChange(index, 'obs_operacion', e.target.value)}
+                    placeholder="Notas del pago"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
       
       <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
         <div className="text-sm">
@@ -1495,52 +1603,6 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       </label>
     </div>
 
-    {/* Campos de operación si ≠ efectivo */}
-    {pagos.some(p => {
-    const m = metodosPago.find(mp => String(mp.id) === String(p.metodo_pago_id));
-    return m && m.nombre.toLowerCase() !== 'efectivo';
-    }) && (
-      <>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha operación</label>
-          <input
-            type="date"
-            value={formData.fecha_operacion || ''}
-            onChange={(e) => setFormData(prev => ({ ...prev, fecha_operacion: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Hora operación</label>
-          <input
-            type="time"
-            value={formData.hora_operacion || ''}
-            onChange={(e) => setFormData(prev => ({ ...prev, hora_operacion: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° operación</label>
-          <input
-            type="text"
-            value={formData.nro_operacion || ''}
-            onChange={(e) => setFormData(prev => ({ ...prev, nro_operacion: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            placeholder="Código / referencia"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Obs. operación</label>
-          <input
-            type="text"
-            value={formData.obs_operacion || ''}
-            onChange={(e) => setFormData(prev => ({ ...prev, obs_operacion: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            placeholder="Notas del pago"
-          />
-        </div>
-      </>
-    )}
   </div>
 
   {/* Observaciones */}

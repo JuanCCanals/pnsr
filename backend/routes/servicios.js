@@ -84,7 +84,11 @@ router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), asy
       `SELECT s.*,
           ts.nombre  AS tipo_servicio_nombre,
           ts.precio_base,
-          c.nombre   AS cliente_nombre
+          c.nombre   AS cliente_nombre,
+          c.dni      AS cliente_dni,
+          c.telefono AS cliente_telefono,
+          c.email    AS cliente_email,
+          (SELECT co.id FROM cobros co WHERE co.servicio_id = s.id ORDER BY co.id DESC LIMIT 1) AS cobro_id
           FROM servicios s
           JOIN tipos_servicio ts ON ts.id = s.tipo_servicio_id
           JOIN clientes c ON c.id = s.cliente_id

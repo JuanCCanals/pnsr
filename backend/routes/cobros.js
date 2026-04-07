@@ -289,9 +289,98 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
   } catch (error) {
     await connection.rollback();
     console.error('Error creando cobro:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Error interno al crear cobro' 
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error interno al crear cobro'
+    });
+  } finally {
+    connection.release();
+  }
+});
+
+/**
+ * PUT /api/cobros/:id
+ * Actualizar cobro existente (concepto, monto, observaciones) y reemplazar pagos.
+ * NO regenera el comprobante (se mantiene la serie/correlativo ya emitidos).
+ */
+router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.actualizar'), async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const { id } = req.params;
+    const {
+      cliente_nombre,
+      cliente_dni = '',
+      cliente_telefono = '',
+      cliente_email = '',
+      concepto,
+      monto,
+      pagos = [],
+      observaciones = null
+    } = req.body;
+
+    // Verificar que el cobro exista
+    const [existRows] = await connection.query('SELECT id, cliente_id FROM cobros WHERE id = ?', [id]);
+    if (!existRows.length) {
+      throw new Error('Cobro no encontrado');
+    }
+
+    // Validaciones
+    if (!cliente_nombre || !String(cliente_nombre).trim()) {
+      throw new Error('El nombre del cliente es obligatorio');
+    }
+    if (!concepto || !String(concepto).trim()) {
+      throw new Error('El concepto es obligatorio');
+    }
+    if (!monto || Number(monto) <= 0) {
+      throw new Error('El monto debe ser mayor a 0');
+    }
+    if (!Array.isArray(pagos) || pagos.length === 0) {
+      throw new Error('Debe seleccionar al menos una forma de pago');
+    }
+
+    const sumaPagos = pagos.reduce((sum, p) => sum + parseFloat(p.monto || 0), 0);
+    const totalEsperado = parseFloat(monto);
+    if (Math.abs(sumaPagos - totalEsperado) > 0.01) {
+      throw new Error(`La suma de los pagos (S/ ${sumaPagos.toFixed(2)}) no coincide con el total (S/ ${totalEsperado.toFixed(2)}).`);
+    }
+
+    // Actualizar / asegurar cliente (usa DNI como llave natural si existe)
+    const cliente_id = await ensureCliente(connection, cliente_nombre, cliente_dni, cliente_telefono, cliente_email);
+
+    // Actualizar cobro
+    await connection.execute(
+      `UPDATE cobros SET cliente_id = ?, concepto = ?, monto = ?, observaciones = ? WHERE id = ?`,
+      [cliente_id, concepto, monto, observaciones, id]
+    );
+
+    // Reemplazar pagos: borrar los existentes y reinsertar
+    await connection.execute(`DELETE FROM cobros_pagos WHERE cobro_id = ?`, [id]);
+
+    for (const pago of pagos) {
+      if (!pago.metodo_pago_id || !pago.monto) {
+        throw new Error('Cada forma de pago debe tener un método seleccionado y un monto válido');
+      }
+      await connection.execute(
+        `INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, pago.metodo_pago_id, pago.monto,
+         pago.fecha_operacion || null, pago.hora_operacion || null,
+         pago.nro_operacion || null, pago.obs_operacion || null]
+      );
+    }
+
+    await connection.commit();
+
+    res.json({ success: true, data: { cobro_id: Number(id) } });
+  } catch (error) {
+    await connection.rollback();
+    console.error('Error actualizando cobro:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Error interno al actualizar cobro'
     });
   } finally {
     connection.release();
@@ -324,11 +413,16 @@ router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.l
       return res.status(404).json({ success: false, error: 'Cobro no encontrado' });
     }
 
-    // Obtener pagos del cobro
+    // Obtener pagos del cobro (incluye metodo_pago_id + datos de operación por pago)
     const [pagos] = await pool.query(`
-      SELECT 
+      SELECT
         cp.id,
+        cp.metodo_pago_id,
         cp.monto,
+        cp.fecha_operacion,
+        cp.hora_operacion,
+        cp.nro_operacion,
+        cp.obs_operacion,
         mp.nombre as metodo_pago
       FROM cobros_pagos cp
       JOIN metodos_pago mp ON cp.metodo_pago_id = mp.id
@@ -352,7 +446,6 @@ router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.l
 router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-servicios.leer'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { hideCliente = '0' } = req.query;
 
     // Obtener cobro con todos los datos
     const [rows] = await pool.query(`
@@ -382,9 +475,10 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     const cobro = rows[0];
 
-    // Obtener pagos
+    // Obtener pagos con datos de operación por pago
     const [pagos] = await pool.query(`
-      SELECT cp.monto, mp.nombre as metodo
+      SELECT cp.monto, mp.nombre as metodo,
+             cp.fecha_operacion, cp.hora_operacion, cp.nro_operacion, cp.obs_operacion
       FROM cobros_pagos cp
       JOIN metodos_pago mp ON cp.metodo_pago_id = mp.id
       WHERE cp.cobro_id = ?
@@ -434,11 +528,9 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
        .text('DE LA RECONCILIACIÓN', { align: 'center' });
     doc.moveDown(0.3);
     doc.fontSize(6.5).font('Helvetica')
-       .text('Cabildo Metropolitano de Lima', { align: 'center' });
-    doc.fontSize(6.5)
-       .text('RUC: 20177176771', { align: 'center' });
+       .text('RUC: 20387535684', { align: 'center' });
     doc.fontSize(6)
-       .text('Jr. Carabaya S/N, Plaza de Armas - Lima', { align: 'center' });
+       .text('Jr. Los Pinos 291, Urb. Camacho, La Molina', { align: 'center' });
 
     // Línea doble
     doc.moveDown(0.6);
@@ -467,21 +559,18 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.text(`Hora: ${horaStr}`, M, yFecha, { width: CW, align: 'right' });
     doc.moveDown(0.6);
 
-    // ═══════════ CLIENTE / BENEFACTOR ═══════════
-    const mostrarCliente = hideCliente !== '1';
-    if (mostrarCliente || esCaja) {
+    // ═══════════ CLIENTE / BENEFACTOR (siempre obligatorio) ═══════════
+    {
       doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
       doc.undash();
       doc.moveDown(0.35);
 
       doc.fontSize(7.5).font('Helvetica-Bold')
-         .text(esCaja ? 'BENEFACTOR:' : 'CLIENTE:', M);
+         .text(esCaja ? 'BENEFACTOR:' : 'FELIGRÉS:', M);
       doc.moveDown(0.1);
       doc.fontSize(7.5).font('Helvetica')
          .text(cobro.cliente_nombre || '—', M);
-      if (cobro.cliente_dni) {
-        doc.text(`DNI: ${cobro.cliente_dni}`, M);
-      }
+      doc.text(`DNI: ${cobro.cliente_dni || '—'}`, M);
       doc.moveDown(0.5);
     }
 
@@ -568,7 +657,27 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.moveDown(0.15);
     doc.font('Helvetica');
     pagos.forEach(pago => {
-      doc.fontSize(7).text(`  • ${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, M);
+      doc.fontSize(7).font('Helvetica-Bold')
+         .text(`  • ${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, M);
+      // Datos de operación (solo si el método no es efectivo y existen datos)
+      const esEfectivo = String(pago.metodo || '').toLowerCase() === 'efectivo';
+      if (!esEfectivo) {
+        doc.font('Helvetica').fontSize(6.5);
+        if (pago.fecha_operacion) {
+          const fOp = new Date(pago.fecha_operacion);
+          const fOpStr = fOp.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          const hOpStr = pago.hora_operacion ? String(pago.hora_operacion).slice(0, 5) : '';
+          doc.text(`      Fecha op.: ${fOpStr}${hOpStr ? '  Hora: ' + hOpStr : ''}`, M);
+        } else if (pago.hora_operacion) {
+          doc.text(`      Hora op.: ${String(pago.hora_operacion).slice(0, 5)}`, M);
+        }
+        if (pago.nro_operacion) {
+          doc.text(`      N° operación: ${pago.nro_operacion}`, M);
+        }
+        if (pago.obs_operacion) {
+          doc.text(`      Obs: ${pago.obs_operacion}`, M, doc.y, { width: CW });
+        }
+      }
     });
 
     // ═══════════ QR CODE ═══════════
@@ -592,11 +701,6 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     doc.fontSize(7).font('Helvetica-Bold')
        .text(footerText, { align: 'center', width: CW });
-    doc.moveDown(0.2);
-    doc.fontSize(5.5).font('Helvetica')
-       .text('Documento sin efectos legales del sistema', { align: 'center' });
-    doc.fontSize(5.5)
-       .text('jurídico nacional (Canon 222 §1 CDC)', { align: 'center' });
 
     doc.end();
 

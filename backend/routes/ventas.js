@@ -908,11 +908,9 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
        .text('DE LA RECONCILIACIÓN', { align: 'center' });
     doc.moveDown(0.15);
     doc.fontSize(6.5).font('Helvetica')
-       .text('Cabildo Metropolitano de Lima', { align: 'center' });
-    doc.fontSize(6.5)
-       .text('RUC: 20177176771', { align: 'center' });
+       .text('RUC: 20387535684', { align: 'center' });
     doc.fontSize(6)
-       .text('Jr. Carabaya S/N, Plaza de Armas - Lima', { align: 'center' });
+       .text('Jr. Los Pinos 291, Urb. Camacho, La Molina', { align: 'center' });
 
     // Línea doble
     doc.moveDown(0.4);
@@ -1046,11 +1044,6 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
 
     doc.fontSize(7).font('Helvetica-Bold')
        .text(footerText, { align: 'center', width: CW });
-    doc.moveDown(0.15);
-    doc.fontSize(5.5).font('Helvetica')
-       .text('Documento sin efectos legales del sistema', { align: 'center' });
-    doc.fontSize(5.5)
-       .text('jurídico nacional (Canon 222 §1 CDC)', { align: 'center' });
 
     doc.end();
 

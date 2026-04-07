@@ -119,6 +119,9 @@ export const cobrosService = {
   crear: (payload) =>
     api.post('/cobros', payload).then(r => r.data),
 
+  actualizar: (id, payload) =>
+    api.put(`/cobros/${id}`, payload).then(r => r.data),
+
   getById: (id) =>
     api.get(`/cobros/${id}`).then(r => r.data),
 
