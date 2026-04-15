@@ -88,7 +88,10 @@ router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), asy
           c.dni      AS cliente_dni,
           c.telefono AS cliente_telefono,
           c.email    AS cliente_email,
-          (SELECT co.id FROM cobros co WHERE co.servicio_id = s.id ORDER BY co.id DESC LIMIT 1) AS cobro_id
+          COALESCE(
+            (SELECT cs.cobro_id FROM cobro_servicios cs WHERE cs.servicio_id = s.id ORDER BY cs.cobro_id DESC LIMIT 1),
+            (SELECT co.id FROM cobros co WHERE co.servicio_id = s.id ORDER BY co.id DESC LIMIT 1)
+          ) AS cobro_id
           FROM servicios s
           JOIN tipos_servicio ts ON ts.id = s.tipo_servicio_id
           JOIN clientes c ON c.id = s.cliente_id

@@ -5,6 +5,7 @@
  * Tabla: donaciones_fisicas
  */
 import React, { useEffect, useState } from 'react';
+import ExcelJS from 'exceljs';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -47,6 +48,9 @@ const DonacionesFisicas = () => {
   const [estadoFilter, setEstadoFilter] = useState('');
   const [fechaDesde, setFechaDesde]   = useState('');
   const [fechaHasta, setFechaHasta]   = useState('');
+
+  // Exportación a Excel
+  const [exporting, setExporting] = useState(false);
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -98,6 +102,101 @@ const DonacionesFisicas = () => {
       if (data.success) setStats(data.data);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // ─── Exportar a Excel (respeta filtros activos) ─────
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      // Traer TODAS las donaciones que matcheen los filtros (sin paginación)
+      const params = {
+        page: 1,
+        limit: 10000,
+        search: search || undefined,
+        categoria: catFilter || undefined,
+        estado: estadoFilter || undefined,
+        desde: fechaDesde || undefined,
+        hasta: fechaHasta || undefined,
+      };
+      const { data } = await api.get('/donaciones-fisicas', { params });
+      if (!data.success) {
+        throw new Error('No se pudo cargar la data para exportar');
+      }
+      const dataSource = data.data || [];
+
+      // Helpers de formato
+      const catLabel = (v) => CATEGORIAS.find(c => c.value === v)?.label || v || '';
+      const estadoLabel = (v) => ESTADOS.find(e => e.value === v)?.label || v || '';
+
+      // Crear workbook
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Donaciones');
+
+      // Headers
+      const headers = [
+        'Fecha Donación', 'Donante', 'DNI', 'Teléfono',
+        'Categoría', 'Descripción', 'Cantidad', 'Unidad',
+        'Destino', 'Estado', 'Observaciones'
+      ];
+      const headerRow = ws.addRow(headers);
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF16A34A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin' }, bottom: { style: 'thin' },
+          left: { style: 'thin' }, right: { style: 'thin' },
+        };
+      });
+
+      // Data
+      dataSource.forEach((d) => {
+        const fecha = d.fecha_donacion
+          ? new Date(d.fecha_donacion).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+          : '';
+        ws.addRow([
+          fecha,
+          d.donante_nombre || '',
+          d.donante_dni || '',
+          d.donante_telefono || '',
+          catLabel(d.categoria),
+          d.descripcion || '',
+          Number(d.cantidad || 0),
+          d.unidad || '',
+          d.destino || '',
+          estadoLabel(d.estado),
+          d.observaciones || '',
+        ]);
+      });
+
+      // Auto-width
+      ws.columns.forEach((col) => {
+        let maxLen = 12;
+        col.eachCell({ includeEmpty: true }, (cell) => {
+          const len = cell.value ? String(cell.value).length + 2 : 0;
+          if (len > maxLen) maxLen = len;
+        });
+        col.width = Math.min(maxLen, 50);
+      });
+
+      // Descargar
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `donaciones_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setSuccess(`Excel exportado exitosamente (${dataSource.length} donaciones)`);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error('Error exportando donaciones:', err);
+      setError('Error al exportar a Excel: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -202,14 +301,24 @@ const DonacionesFisicas = () => {
               Registro de donaciones de bienes: ropa, alimentos, artículos de primera necesidad, etc.
             </p>
           </div>
-          {canCreate && (
+          <div className="flex gap-2">
             <button
-              onClick={openNew}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg transition-colors inline-flex items-center gap-2"
+              title="Exportar donaciones a Excel (respeta filtros activos)"
             >
-              + Nueva Donación
+              {exporting ? '⏳ Exportando...' : '📊 Exportar Excel'}
             </button>
-          )}
+            {canCreate && (
+              <button
+                onClick={openNew}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+              >
+                + Nueva Donación
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Stats */}

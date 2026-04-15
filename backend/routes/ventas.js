@@ -412,9 +412,10 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
     for (const c of cajasResueltas) {
       await conn.query(
         `INSERT INTO ventas_cajas
-          (caja_id, benefactor_id, modalidad_id, punto_venta_id, usuario_id, monto, moneda, fecha, estado_pago)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
+          (venta_id, caja_id, benefactor_id, modalidad_id, punto_venta_id, usuario_id, monto, moneda, fecha, estado_pago)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [
+          ventaId,
           c.id,
           benefactorId,
           modalidad_id,
@@ -451,7 +452,10 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
         [ventaId, -160]
       );
     } else if (is40 || is160) {
-      const costoBase    = is40 ? 40 : 160;
+      // Para S/40: el costo base depende de cuántas cajas físicas se asignaron
+      // Para S/160: es un paquete fijo sin cajas físicas asignadas
+      const cantidadCajas = cajasResueltas?.length || 0;
+      const costoBase    = is40 ? (40 * cantidadCajas) : 160;
       const excedentePos = Number(montoVenta) - costoBase;
 
       // SOLO graba si hay excedente positivo
@@ -509,12 +513,23 @@ function buildVentasWhere({ search, forma_pago, modalidad_id, estado, fecha_desd
   const params = [];
 
   if (search) {
+    // Busca por recibo, nombre del benefactor, o código de caja / familia.
+    // Usa EXISTS para el código, así un match en cualquier caja asociada
+    // muestra la venta completa sin perder el GROUP_CONCAT de todos sus códigos.
     where.push(`(
       v.recibo LIKE ?
       OR b.nombre LIKE ?
-      OR v.moneda LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM ventas_cajas vc2
+        JOIN cajas c2 ON c2.id = vc2.caja_id
+        LEFT JOIN familias f2 ON f2.id = c2.familia_id
+        WHERE vc2.venta_id = v.id
+          AND (c2.codigo LIKE ? OR f2.codigo_unico LIKE ?)
+      )
     )`);
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    const term = `%${search}%`;
+    params.push(term, term, term, term);
   }
   if (forma_pago)  { where.push(`v.forma_pago = ?`);   params.push(forma_pago); }
   if (modalidad_id){ where.push(`v.modalidad_id = ?`); params.push(modalidad_id); }
@@ -537,7 +552,7 @@ router.get('/', authenticateToken, authorizePermission('venta_cajas.leer'), asyn
     LEFT JOIN benefactores b ON b.id = v.benefactor_id
     LEFT JOIN campania_modalidades m ON m.id = v.modalidad_id
     LEFT JOIN puntos_venta p        ON p.id = v.punto_venta_id
-    LEFT JOIN ventas_cajas vc       ON vc.fecha = v.fecha AND vc.benefactor_id = v.benefactor_id
+    LEFT JOIN ventas_cajas vc       ON vc.venta_id = v.id
     LEFT JOIN cajas c               ON c.id = vc.caja_id
     ${whereSql}
   `;
@@ -609,7 +624,7 @@ router.get('/export', authenticateToken, authorizePermission('venta_cajas.leer')
       LEFT JOIN benefactores b           ON b.id = v.benefactor_id
       LEFT JOIN campania_modalidades m   ON m.id = v.modalidad_id
       LEFT JOIN puntos_venta p           ON p.id = v.punto_venta_id
-      LEFT JOIN ventas_cajas vc          ON vc.fecha = v.fecha AND vc.benefactor_id = v.benefactor_id
+      LEFT JOIN ventas_cajas vc          ON vc.venta_id = v.id
       LEFT JOIN cajas c                  ON c.id = vc.caja_id
       ${whereSql}
     `;
@@ -772,10 +787,8 @@ router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualiza
         await conn.query(`
           UPDATE cajas c
           JOIN ventas_cajas vc ON vc.caja_id = c.id
-          JOIN ventas v ON v.benefactor_id = vc.benefactor_id
-                         AND v.fecha = vc.fecha
           SET c.estado = ?
-          WHERE v.id = ?`,
+          WHERE vc.venta_id = ?`,
           [estadoCaja, ventaId]
         );
       }
@@ -796,29 +809,26 @@ router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualiza
 
 
 // ========= GET /api/ventas/:id/cajas =========
-// Devuelve las cajas asociadas a una venta (vía ventas_cajas por benefactor_id + fecha)
+// Devuelve las cajas asociadas a una venta (vía ventas_cajas.venta_id)
 router.get('/:id/cajas', authenticateToken, authorizePermission('venta_cajas.leer'), async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Obtener benefactor_id y fecha de la venta
-    const [ventas] = await pool.query(
-      `SELECT benefactor_id, fecha FROM ventas WHERE id = ?`, [id]
-    );
+    // Verificar que la venta exista
+    const [ventas] = await pool.query(`SELECT id FROM ventas WHERE id = ?`, [id]);
     if (!ventas.length) {
       return res.status(404).json({ success: false, error: 'Venta no encontrada' });
     }
-    const { benefactor_id, fecha } = ventas[0];
 
-    // Buscar cajas vinculadas
+    // Buscar cajas vinculadas directamente por venta_id
     const [cajas] = await pool.query(`
       SELECT c.id, c.codigo, c.estado, c.familia_id, c.benefactor_id,
              vc.monto, vc.estado_pago, vc.estado_movimiento
       FROM ventas_cajas vc
       JOIN cajas c ON c.id = vc.caja_id
-      WHERE vc.benefactor_id = ? AND vc.fecha = ?
+      WHERE vc.venta_id = ?
       ORDER BY c.codigo
-    `, [benefactor_id, fecha]);
+    `, [id]);
 
     res.json({ success: true, data: cajas });
   } catch (e) {
@@ -852,13 +862,13 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
     if (!ventas.length) return res.status(404).json({ success: false, error: 'Venta no encontrada' });
     const venta = ventas[0];
 
-    // Cajas asociadas
+    // Cajas asociadas (por venta_id)
     const [cajas] = await pool.query(`
       SELECT vc.caja_id, vc.monto, c.codigo
       FROM ventas_cajas vc
       LEFT JOIN cajas c ON c.id = vc.caja_id
-      WHERE vc.benefactor_id = ? AND vc.fecha = ?
-    `, [venta.benefactor_id, venta.fecha]);
+      WHERE vc.venta_id = ?
+    `, [id]);
 
     // Pagos
     const [pagos] = await pool.query(`
@@ -933,8 +943,9 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
 
     // ═══════════ FECHA ═══════════
     const fecha = new Date(venta.fecha || Date.now());
-    const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+    const TZ_LIMA = 'America/Lima';
+    const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
+    const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: TZ_LIMA });
 
     doc.fontSize(7.5).font('Helvetica');
     const yFecha = doc.y;
@@ -1013,7 +1024,7 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
     if (venta.fecha_devolucion) {
       doc.moveDown(0.2);
       doc.fontSize(7).font('Helvetica-Bold')
-         .text(`Fecha devolución: ${new Date(venta.fecha_devolucion).toLocaleDateString('es-PE')}`, M);
+         .text(`Fecha devolución: ${new Date(venta.fecha_devolucion).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA })}`, M);
     }
 
     // Observaciones

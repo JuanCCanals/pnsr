@@ -104,12 +104,27 @@ const Campanias = () => {
   const toggleEstado = async (camp) => {
     setLoading(true);
     try {
-      const nuevoEstado = camp.estado === 'ACTIVA' ? 'INACTIVA' : 'ACTIVA';
       await api.patch(`/campanias/${camp.id}/toggle`);
       fetchCampanias();
     } catch (err) {
       console.error(err);
       setError('No se pudo cambiar el estado');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ─── Eliminar ─────────────────────────────────────────
+  const handleDelete = async (camp) => {
+    if (!window.confirm(`¿Eliminar la campaña "${camp.nombre}" (${camp.anio})?\nEsta acción no se puede deshacer.`)) return;
+    setLoading(true);
+    try {
+      await api.delete(`/campanias/${camp.id}`);
+      fetchCampanias();
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.message || 'No se pudo eliminar';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -166,6 +181,13 @@ const Campanias = () => {
                     }`}
                   >
                     {c.estado === 'ACTIVA' ? 'Desactivar' : 'Activar'}
+                  </button>}
+                  {canDelete && <button
+                    onClick={() => handleDelete(c)}
+                    className="px-2 py-1 text-xs rounded text-white bg-gray-600 hover:bg-gray-700"
+                    title="Eliminar campaña"
+                  >
+                    Eliminar
                   </button>}
                 </td>
               </tr>

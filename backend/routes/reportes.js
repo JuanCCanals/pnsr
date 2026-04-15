@@ -23,13 +23,30 @@ router.get('/seguimiento-cajas', authenticateToken, authorizePermission('reporte
     if (zona_id) { w.push(`f.zona_id = ?`); a.push(zona_id); }
     if (estado)  { w.push(`c.estado = ?`);  a.push(estado); }
     const wSQL = w.length ? `WHERE ${w.join(' AND ')}` : '';
+    // Leer datos del benefactor y fecha_devolucion desde la venta más reciente
+    // asociada a la caja (y SOLO si la caja NO está "disponible"). De esta forma:
+    //  - Cajas disponibles NO muestran benefactor (no tienen venta activa).
+    //  - Cajas asignadas/entregadas muestran el benefactor correcto desde ventas.
+    //  - fecha_devolución sale desde ventas.fecha_devolucion (fuente real).
     const [rows] = await pool.query(`
       SELECT c.codigo AS codigo_caja, f.codigo_unico AS familia, c.estado,
-        z.nombre AS zona, c.fecha_devolucion,
-        b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono, b.email AS benefactor_email
+        z.nombre AS zona,
+        v.fecha_devolucion AS fecha_devolucion,
+        b.nombre AS benefactor_nombre,
+        b.telefono AS benefactor_telefono,
+        b.email AS benefactor_email
       FROM cajas c
-      LEFT JOIN familias f ON f.id=c.familia_id LEFT JOIN zonas z ON z.id=f.zona_id
-      LEFT JOIN benefactores b ON b.id=c.benefactor_id ${wSQL} ORDER BY c.codigo`, a);
+      LEFT JOIN familias f ON f.id = c.familia_id
+      LEFT JOIN zonas z ON z.id = f.zona_id
+      LEFT JOIN ventas_cajas vc
+        ON vc.caja_id = c.id
+        AND c.estado IN ('asignada','entregada','devuelta','entregada_familia')
+        AND vc.id = (SELECT MAX(vc2.id) FROM ventas_cajas vc2 WHERE vc2.caja_id = c.id)
+      LEFT JOIN ventas v ON v.id = vc.venta_id
+      LEFT JOIN benefactores b ON b.id = v.benefactor_id
+      ${wSQL}
+      ORDER BY c.codigo
+    `, a);
     rows.forEach(r => { r.estado_texto = mapEstado(r.estado); });
     const [zonas] = await pool.query(`SELECT id, nombre FROM zonas ORDER BY nombre`);
     res.json({ success:true, data:rows, zonas });
@@ -46,11 +63,53 @@ router.get('/beneficiados', authenticateToken, authorizePermission('reportes'), 
       FROM familias f LEFT JOIN integrantes_familia i ON i.familia_id=f.id
       LEFT JOIN cajas c ON c.familia_id=f.id LEFT JOIN zonas z ON z.id=f.zona_id
       WHERE f.activo=1 GROUP BY f.id,f.codigo_unico,f.nombre_padre,f.nombre_madre,z.nombre`);
+
+    // Calcular dependientes menores o iguales a 13 años por familia
+    const [depRows] = await pool.query(`
+      SELECT i.familia_id, i.fecha_nacimiento, i.edad_texto
+      FROM integrantes_familia i
+      JOIN familias f ON f.id = i.familia_id AND f.activo = 1
+      WHERE i.relacion NOT IN ('padre','madre')
+    `);
+    const depEdad = (r) => {
+      if (r.edad_texto && String(r.edad_texto).trim()) {
+        const t = String(r.edad_texto).trim().toLowerCase();
+        const m = t.match(/^(\d+)\s*m/i); if (m) return parseInt(m[1]) / 12;
+        const n = t.match(/^(\d+)$/);    if (n) return parseInt(n[1]);
+        if (t === 'rn') return 0;
+        return null;
+      }
+      if (r.fecha_nacimiento) {
+        const b = new Date(r.fecha_nacimiento), n = new Date();
+        let a = n.getFullYear() - b.getFullYear();
+        const md = n.getMonth() - b.getMonth();
+        if (md < 0 || (md === 0 && n.getDate() < b.getDate())) a--;
+        return Math.max(0, a);
+      }
+      return null;
+    };
+    const dependientesPorFamilia = {};
+    depRows.forEach(r => {
+      const edad = depEdad(r);
+      if (edad === null) return;
+      if (edad <= 13) {
+        dependientesPorFamilia[r.familia_id] = (dependientesPorFamilia[r.familia_id] || 0) + 1;
+      }
+    });
+
     let c5t=0,c5a=0,cm5t=0,cm5a=0;
     const famRows = famData.map(f => {
       const g = f.total_integrantes>=5?'5+ miembros':'Menos de 5';
       if(f.total_integrantes>=5){c5t++;if(f.asignada)c5a++;}else{cm5t++;if(f.asignada)cm5a++;}
-      return {codigo:f.codigo_unico,titular:f.nombre_padre||f.nombre_madre||'',zona:f.zona||'',integrantes:f.total_integrantes,grupo:g,asignada:f.asignada?'Sí':'No'};
+      return {
+        codigo: f.codigo_unico,
+        titular: f.nombre_padre || f.nombre_madre || '',
+        zona: f.zona || '',
+        integrantes: f.total_integrantes,
+        dependientes_menor_13: dependientesPorFamilia[f.id] || 0,
+        grupo: g,
+        asignada: f.asignada ? 'Sí' : 'No'
+      };
     });
     const [[{familias_sin_dependientes}]] = await pool.query(`
       SELECT COUNT(*) AS familias_sin_dependientes FROM familias f WHERE f.activo=1
@@ -99,13 +158,30 @@ router.get('/general', authenticateToken, authorizePermission('reportes'), async
     const [[{dinero_ingresado}]]=await pool.query(`SELECT COALESCE(SUM(v.monto),0) AS dinero_ingresado FROM ventas v`);
     const pv=total_cajas>0?((cajas_vendidas/total_cajas)*100).toFixed(1):'0.0';
     const pd=cajas_vendidas>0?((cajas_devueltas/cajas_vendidas)*100).toFixed(1):'0.0';
+    // Benefactor se saca de la venta más reciente asociada a la caja
+    // y SOLO si la caja NO está 'disponible'. Así evitamos que "quede pegado"
+    // un benefactor anterior en cajas ya devueltas o sin venta activa.
     const [famRows]=await pool.query(`
-      SELECT f.codigo_unico AS codigo, COALESCE(NULLIF(f.nombre_padre,''),f.nombre_madre) AS titular,
-        z.nombre AS zona, COUNT(DISTINCT i.id) AS integrantes,
-        COALESCE(c.estado,'sin_caja') AS estado_caja, b.nombre AS benefactor
-      FROM familias f LEFT JOIN zonas z ON z.id=f.zona_id LEFT JOIN integrantes_familia i ON i.familia_id=f.id
-      LEFT JOIN cajas c ON c.familia_id=f.id LEFT JOIN benefactores b ON b.id=c.benefactor_id
-      WHERE f.activo=1 GROUP BY f.id,f.codigo_unico,f.nombre_padre,f.nombre_madre,z.nombre,c.estado,b.nombre ORDER BY f.codigo_unico`);
+      SELECT f.codigo_unico AS codigo,
+        COALESCE(NULLIF(f.nombre_padre,''),f.nombre_madre) AS titular,
+        z.nombre AS zona,
+        COUNT(DISTINCT i.id) AS integrantes,
+        COALESCE(c.estado,'sin_caja') AS estado_caja,
+        b.nombre AS benefactor
+      FROM familias f
+      LEFT JOIN zonas z ON z.id = f.zona_id
+      LEFT JOIN integrantes_familia i ON i.familia_id = f.id
+      LEFT JOIN cajas c ON c.familia_id = f.id
+      LEFT JOIN ventas_cajas vc
+        ON vc.caja_id = c.id
+        AND c.estado IN ('asignada','entregada','devuelta','entregada_familia')
+        AND vc.id = (SELECT MAX(vc2.id) FROM ventas_cajas vc2 WHERE vc2.caja_id = c.id)
+      LEFT JOIN ventas v ON v.id = vc.venta_id
+      LEFT JOIN benefactores b ON b.id = v.benefactor_id
+      WHERE f.activo = 1
+      GROUP BY f.id, f.codigo_unico, f.nombre_padre, f.nombre_madre, z.nombre, c.estado, b.nombre
+      ORDER BY f.codigo_unico
+    `);
     famRows.forEach(r=>{r.estado_texto=r.estado_caja==='sin_caja'?'Sin caja':mapEstado(r.estado_caja);});
     res.json({success:true,data:{cards:{total_familias,total_personas,familias_asignadas,total_cajas,cajas_vendidas,pct_vendidas:Number(pv),cajas_devueltas,pct_devueltas:Number(pd),dinero_ingresado:Number(dinero_ingresado)},familias:famRows}});
   } catch(e){console.error(e);res.status(500).json({success:false,error:'Error interno'});}
@@ -154,7 +230,7 @@ router.get('/pagos-cajas', authenticateToken, authorizePermission('reportes'), a
       JOIN ventas v ON v.id = vp.venta_id
       LEFT JOIN benefactores b ON b.id = v.benefactor_id
       LEFT JOIN campania_modalidades cm ON cm.id = v.modalidad_id
-      LEFT JOIN ventas_cajas vc ON vc.benefactor_id = v.benefactor_id AND vc.fecha = v.fecha
+      LEFT JOIN ventas_cajas vc ON vc.venta_id = v.id
       LEFT JOIN cajas c_cod ON c_cod.id = vc.caja_id
       ${wSQL}
       GROUP BY vp.id, vp.fecha, vp.forma_pago, vp.monto, vp.moneda,

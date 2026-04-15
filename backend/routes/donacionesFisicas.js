@@ -25,7 +25,7 @@ router.get('/', authenticateToken, authorizePermission('donaciones_fisicas.leer'
     const desde     = norm(req.query.desde);
     const hasta     = norm(req.query.hasta);
     const page      = Math.max(toInt(req.query.page || '1'), 1);
-    const limit     = Math.min(Math.max(toInt(req.query.limit || '20'), 1), 200);
+    const limit     = Math.min(Math.max(toInt(req.query.limit || '20'), 1), 10000);
     const offset    = (page - 1) * limit;
 
     const where = [];

@@ -10,6 +10,11 @@ const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
 const PDFDocument = require('pdfkit');
+const path = require('path');
+const fs = require('fs');
+
+// Ruta absoluta al logo PNSR (para cabecera del ticket PDF)
+const LOGO_PATH = path.join(__dirname, '..', '..', 'logos', 'Logo-PNSR-Web1.png');
 
 // ===================================================================
 // FUNCIONES AUXILIARES
@@ -177,44 +182,79 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
   try {
     await connection.beginTransaction();
 
-    const { 
-      servicio_id = null, 
-      caja_id = null, 
+    const {
+      servicio_id = null,
+      caja_id = null,
       cliente_nombre,
       cliente_dni = '',
       cliente_telefono = '',
       cliente_email = '',
-      concepto, 
-      monto, 
-      pagos = [], // Array de { metodo_pago_id, monto }
-      observaciones = null 
+      concepto: conceptoBody,
+      monto: montoBody,
+      pagos = [],
+      items = [],
+      observaciones = null,
+      estado = 'programado'
     } = req.body;
+
+    const hasItems = Array.isArray(items) && items.length > 0;
+    const ESTADOS_VALIDOS = ['programado', 'realizado', 'cancelado'];
+    const estadoFinal = ESTADOS_VALIDOS.includes(estado) ? estado : 'programado';
 
     // Validaciones básicas con mensajes claros
     if (!cliente_nombre || !String(cliente_nombre).trim()) {
       throw new Error('El nombre del cliente es obligatorio');
     }
 
-    if (!concepto || !String(concepto).trim()) {
-      throw new Error('El concepto es obligatorio');
-    }
-
-    if (!monto || Number(monto) <= 0) {
-      throw new Error('El monto debe ser mayor a 0');
-    }
-
-    if (!servicio_id && !caja_id) {
-      throw new Error('Debe indicar servicio_id o caja_id');
+    if (!hasItems) {
+      // Legacy flow: concepto y monto obligatorios
+      if (!conceptoBody || !String(conceptoBody).trim()) {
+        throw new Error('El concepto es obligatorio');
+      }
+      if (!montoBody || Number(montoBody) <= 0) {
+        throw new Error('El monto debe ser mayor a 0');
+      }
+      if (!servicio_id && !caja_id) {
+        throw new Error('Debe indicar servicio_id o caja_id');
+      }
+    } else {
+      // Multi-item flow: validar cada item
+      for (const item of items) {
+        if (!item.tipo_servicio_id) throw new Error('Cada servicio debe tener un tipo de servicio');
+        if (!item.precio || Number(item.precio) <= 0) throw new Error('Cada servicio debe tener un precio mayor a 0');
+      }
     }
 
     if (!Array.isArray(pagos) || pagos.length === 0) {
       throw new Error('Debe seleccionar al menos una forma de pago');
     }
 
+    // Calcular monto y concepto según flujo
+    let concepto, monto;
+
+    if (hasItems) {
+      // Obtener nombres de tipos_servicio para el concepto
+      const tipoIds = [...new Set(items.map(i => i.tipo_servicio_id))];
+      const placeholders = tipoIds.map(() => '?').join(',');
+      const [tiposRows] = await connection.query(
+        `SELECT id, nombre FROM tipos_servicio WHERE id IN (${placeholders})`,
+        tipoIds
+      );
+      const tiposMap = {};
+      tiposRows.forEach(t => { tiposMap[t.id] = t.nombre; });
+
+      monto = items.reduce((sum, i) => sum + parseFloat(i.precio || 0), 0);
+      const labels = items.map(i => tiposMap[i.tipo_servicio_id] || 'Servicio');
+      concepto = labels.join(' + ');
+    } else {
+      concepto = conceptoBody;
+      monto = montoBody;
+    }
+
     // Validar suma de pagos
     const sumaPagos = pagos.reduce((sum, p) => sum + parseFloat(p.monto || 0), 0);
     const totalEsperado = parseFloat(monto);
-    
+
     if (Math.abs(sumaPagos - totalEsperado) > 0.01) {
       throw new Error(`La suma de los pagos (S/ ${sumaPagos.toFixed(2)}) no coincide con el total del servicio (S/ ${totalEsperado.toFixed(2)}). Por favor ajuste los montos.`);
     }
@@ -230,30 +270,81 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
     // Crear cobro
     const [resultCobro] = await connection.execute(`
       INSERT INTO cobros (
-        servicio_id, 
-        caja_id, 
-        cliente_id, 
-        concepto, 
-        monto, 
+        servicio_id,
+        caja_id,
+        cliente_id,
+        concepto,
+        monto,
         numero_comprobante,
-        observaciones, 
+        observaciones,
         usuario_id,
         fecha_cobro
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        servicio_id, 
-        caja_id, 
-        cliente_id, 
-        concepto, 
-        monto, 
+        hasItems ? null : servicio_id,
+        caja_id,
+        cliente_id,
+        concepto,
+        monto,
         numero_comprobante,
-        observaciones, 
+        observaciones,
         req.user?.id || 1
       ]
     );
 
     const cobro_id = resultCobro.insertId;
+
+    // Safeguard: limpiar rows huérfanas de cobro_servicios que pudieran existir
+    // con este cobro_id (puede pasar si se purgó cobros sin purgar cobro_servicios)
+    await connection.execute(`DELETE FROM cobro_servicios WHERE cobro_id = ?`, [cobro_id]);
+
+    // Insertar items en cobro_servicios
+    if (hasItems) {
+      // Obtener nombres de tipos_servicio (ya tenemos tiposMap del cálculo anterior,
+      // pero lo reconstruimos aquí por seguridad de scope)
+      const tipoIds2 = [...new Set(items.map(i => i.tipo_servicio_id))];
+      const ph2 = tipoIds2.map(() => '?').join(',');
+      const [tiposRows2] = await connection.query(
+        `SELECT id, nombre FROM tipos_servicio WHERE id IN (${ph2})`,
+        tipoIds2
+      );
+      const tiposMap2 = {};
+      tiposRows2.forEach(t => { tiposMap2[t.id] = t.nombre; });
+
+      for (const item of items) {
+        // Crear servicio individual
+        const [svcResult] = await connection.execute(
+          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            cliente_id,
+            item.tipo_servicio_id,
+            item.fecha_servicio || null,
+            item.hora_servicio || null,
+            item.precio,
+            item.observaciones || null,
+            estadoFinal
+          ]
+        );
+        const newServicioId = svcResult.insertId;
+        const itemConcepto = tiposMap2[item.tipo_servicio_id] || 'Servicio';
+
+        // Insertar en cobro_servicios
+        await connection.execute(
+          `INSERT INTO cobro_servicios (cobro_id, servicio_id, concepto, cantidad, precio_unitario, subtotal)
+           VALUES (?, ?, ?, 1, ?, ?)`,
+          [cobro_id, newServicioId, itemConcepto, item.precio, item.precio]
+        );
+      }
+    } else if (servicio_id) {
+      // Legacy flow con servicio_id: insertar también en cobro_servicios para consistencia
+      await connection.execute(
+        `INSERT INTO cobro_servicios (cobro_id, servicio_id, concepto, cantidad, precio_unitario, subtotal)
+         VALUES (?, ?, ?, 1, ?, ?)`,
+        [cobro_id, servicio_id, concepto, monto, monto]
+      );
+    }
 
     // Crear pagos (múltiples)
     for (const pago of pagos) {
@@ -315,11 +406,17 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
       cliente_dni = '',
       cliente_telefono = '',
       cliente_email = '',
-      concepto,
-      monto,
+      concepto: conceptoBody,
+      monto: montoBody,
       pagos = [],
-      observaciones = null
+      items = [], // Array de { tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones }
+      observaciones = null,
+      estado = 'programado'
     } = req.body;
+
+    const hasItems = Array.isArray(items) && items.length > 0;
+    const ESTADOS_VALIDOS = ['programado', 'realizado', 'cancelado'];
+    const estadoFinal = ESTADOS_VALIDOS.includes(estado) ? estado : 'programado';
 
     // Verificar que el cobro exista
     const [existRows] = await connection.query('SELECT id, cliente_id FROM cobros WHERE id = ?', [id]);
@@ -331,14 +428,44 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
     if (!cliente_nombre || !String(cliente_nombre).trim()) {
       throw new Error('El nombre del cliente es obligatorio');
     }
-    if (!concepto || !String(concepto).trim()) {
-      throw new Error('El concepto es obligatorio');
+
+    if (!hasItems) {
+      if (!conceptoBody || !String(conceptoBody).trim()) {
+        throw new Error('El concepto es obligatorio');
+      }
+      if (!montoBody || Number(montoBody) <= 0) {
+        throw new Error('El monto debe ser mayor a 0');
+      }
+    } else {
+      for (const item of items) {
+        if (!item.tipo_servicio_id) throw new Error('Cada servicio debe tener un tipo de servicio');
+        if (!item.precio || Number(item.precio) <= 0) throw new Error('Cada servicio debe tener un precio mayor a 0');
+      }
     }
-    if (!monto || Number(monto) <= 0) {
-      throw new Error('El monto debe ser mayor a 0');
-    }
+
     if (!Array.isArray(pagos) || pagos.length === 0) {
       throw new Error('Debe seleccionar al menos una forma de pago');
+    }
+
+    // Calcular monto y concepto según flujo
+    let concepto, monto;
+
+    if (hasItems) {
+      const tipoIds = [...new Set(items.map(i => i.tipo_servicio_id))];
+      const placeholders = tipoIds.map(() => '?').join(',');
+      const [tiposRows] = await connection.query(
+        `SELECT id, nombre FROM tipos_servicio WHERE id IN (${placeholders})`,
+        tipoIds
+      );
+      const tiposMap = {};
+      tiposRows.forEach(t => { tiposMap[t.id] = t.nombre; });
+
+      monto = items.reduce((sum, i) => sum + parseFloat(i.precio || 0), 0);
+      const labels = items.map(i => tiposMap[i.tipo_servicio_id] || 'Servicio');
+      concepto = labels.join(' + ');
+    } else {
+      concepto = conceptoBody;
+      monto = montoBody;
     }
 
     const sumaPagos = pagos.reduce((sum, p) => sum + parseFloat(p.monto || 0), 0);
@@ -350,11 +477,74 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
     // Actualizar / asegurar cliente (usa DNI como llave natural si existe)
     const cliente_id = await ensureCliente(connection, cliente_nombre, cliente_dni, cliente_telefono, cliente_email);
 
-    // Actualizar cobro
-    await connection.execute(
-      `UPDATE cobros SET cliente_id = ?, concepto = ?, monto = ?, observaciones = ? WHERE id = ?`,
-      [cliente_id, concepto, monto, observaciones, id]
-    );
+    // Manejar items de cobro_servicios
+    if (hasItems) {
+      // Obtener servicios anteriores vinculados a este cobro via cobro_servicios
+      const [oldItems] = await connection.query(
+        `SELECT servicio_id FROM cobro_servicios WHERE cobro_id = ?`,
+        [id]
+      );
+      const oldServicioIds = oldItems.map(r => r.servicio_id).filter(Boolean);
+
+      // Eliminar registros anteriores de cobro_servicios
+      await connection.execute(`DELETE FROM cobro_servicios WHERE cobro_id = ?`, [id]);
+
+      // Eliminar servicios que fueron creados por este cobro
+      if (oldServicioIds.length > 0) {
+        const phDel = oldServicioIds.map(() => '?').join(',');
+        await connection.execute(
+          `DELETE FROM servicios WHERE id IN (${phDel})`,
+          oldServicioIds
+        );
+      }
+
+      // Obtener nombres de tipos_servicio
+      const tipoIds2 = [...new Set(items.map(i => i.tipo_servicio_id))];
+      const ph2 = tipoIds2.map(() => '?').join(',');
+      const [tiposRows2] = await connection.query(
+        `SELECT id, nombre FROM tipos_servicio WHERE id IN (${ph2})`,
+        tipoIds2
+      );
+      const tiposMap2 = {};
+      tiposRows2.forEach(t => { tiposMap2[t.id] = t.nombre; });
+
+      // Crear nuevos servicios e insertar en cobro_servicios
+      for (const item of items) {
+        const [svcResult] = await connection.execute(
+          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            cliente_id,
+            item.tipo_servicio_id,
+            item.fecha_servicio || null,
+            item.hora_servicio || null,
+            item.precio,
+            item.observaciones || null,
+            estadoFinal
+          ]
+        );
+        const newServicioId = svcResult.insertId;
+        const itemConcepto = tiposMap2[item.tipo_servicio_id] || 'Servicio';
+
+        await connection.execute(
+          `INSERT INTO cobro_servicios (cobro_id, servicio_id, concepto, cantidad, precio_unitario, subtotal)
+           VALUES (?, ?, ?, 1, ?, ?)`,
+          [id, newServicioId, itemConcepto, item.precio, item.precio]
+        );
+      }
+
+      // Actualizar cobro (servicio_id = NULL para multi-item)
+      await connection.execute(
+        `UPDATE cobros SET cliente_id = ?, servicio_id = NULL, concepto = ?, monto = ?, observaciones = ? WHERE id = ?`,
+        [cliente_id, concepto, monto, observaciones, id]
+      );
+    } else {
+      // Legacy flow: solo actualizar concepto/monto
+      await connection.execute(
+        `UPDATE cobros SET cliente_id = ?, concepto = ?, monto = ?, observaciones = ? WHERE id = ?`,
+        [cliente_id, concepto, monto, observaciones, id]
+      );
+    }
 
     // Reemplazar pagos: borrar los existentes y reinsertar
     await connection.execute(`DELETE FROM cobros_pagos WHERE cobro_id = ?`, [id]);
@@ -432,6 +622,16 @@ router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.l
     const cobro = rows[0];
     cobro.pagos = pagos;
 
+    // Obtener items de cobro_servicios
+    const [items] = await pool.query(`
+      SELECT cs.id, cs.servicio_id, cs.concepto, cs.cantidad, cs.precio_unitario, cs.subtotal,
+             s.tipo_servicio_id, s.fecha_servicio, s.hora_servicio
+      FROM cobro_servicios cs
+      LEFT JOIN servicios s ON cs.servicio_id = s.id
+      WHERE cs.cobro_id = ?
+    `, [id]);
+    cobro.items = items;
+
     res.json({ success: true, data: cobro });
   } catch (error) {
     console.error('Error obteniendo cobro:', error);
@@ -484,6 +684,15 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       WHERE cp.cobro_id = ?
     `, [id]);
 
+    // Obtener items de cobro_servicios para el detalle
+    const [ticketItems] = await pool.query(`
+      SELECT cs.id, cs.concepto, cs.cantidad, cs.precio_unitario, cs.subtotal,
+             s.tipo_servicio_id, s.fecha_servicio, s.hora_servicio
+      FROM cobro_servicios cs
+      LEFT JOIN servicios s ON cs.servicio_id = s.id
+      WHERE cs.cobro_id = ?
+    `, [id]);
+
     // Footer configurable
     const [config] = await pool.query(
       `SELECT valor FROM configuracion_sistema WHERE clave = 'ticket_footer_text'`
@@ -521,12 +730,22 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     res.setHeader('Content-Disposition', `inline; filename=ticket_${cobro.numero_comprobante}.pdf`);
     doc.pipe(res);
 
-    // ═══════════ HEADER ═══════════
-    doc.fontSize(10).font('Helvetica-Bold')
-       .text('PARROQUIA N.S.', { align: 'center' });
-    doc.fontSize(9).font('Helvetica-Bold')
-       .text('DE LA RECONCILIACIÓN', { align: 'center' });
-    doc.moveDown(0.3);
+    // ═══════════ HEADER (LOGO) ═══════════
+    if (fs.existsSync(LOGO_PATH)) {
+      // Logo centrado. Ancho ~150pt (aprox 66% del ancho del ticket).
+      const logoWidth = 150;
+      const logoX = (W - logoWidth) / 2;
+      doc.image(LOGO_PATH, logoX, doc.y, { width: logoWidth });
+      // Avanzar Y aproximadamente la altura del logo (ratio ~0.35 para este diseño).
+      doc.y += logoWidth * 0.35 + 4;
+    } else {
+      // Fallback: cabecera de texto si el logo no está disponible
+      doc.fontSize(10).font('Helvetica-Bold')
+         .text('PARROQUIA N.S.', { align: 'center' });
+      doc.fontSize(9).font('Helvetica-Bold')
+         .text('DE LA RECONCILIACIÓN', { align: 'center' });
+      doc.moveDown(0.3);
+    }
     doc.fontSize(6.5).font('Helvetica')
        .text('RUC: 20387535684', { align: 'center' });
     doc.fontSize(6)
@@ -550,8 +769,9 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     // ═══════════ FECHA / HORA DE REGISTRO ═══════════
     const fecha = new Date(cobro.fecha_cobro || Date.now());
-    const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+    const TZ_LIMA = 'America/Lima';
+    const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
+    const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: TZ_LIMA });
 
     doc.fontSize(7.5).font('Helvetica');
     const yFecha = doc.y;
@@ -574,44 +794,6 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       doc.moveDown(0.5);
     }
 
-    // ═══════════ FECHA/HORA DEL SERVICIO (solo para servicios eclesiásticos) ═══════════
-    if (!esCaja && cobro.fecha_servicio) {
-      doc.moveTo(M, doc.y).lineTo(W - M, doc.y).dash(2, { space: 2 }).stroke();
-      doc.undash();
-      doc.moveDown(0.35);
-
-      const fServ = new Date(cobro.fecha_servicio);
-      const fechaServStr = fServ.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-      let horaServStr = '';
-      if (cobro.hora_servicio) {
-        const hParts = String(cobro.hora_servicio).split(':');
-        const hh = parseInt(hParts[0] || 0);
-        const mm = hParts[1] || '00';
-        const ampm = hh < 12 ? 'AM' : 'PM';
-        const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
-        horaServStr = `${h12}:${mm} ${ampm}`;
-      }
-
-      doc.fontSize(7.5).font('Helvetica-Bold')
-         .text('FECHA Y HORA DEL SERVICIO:', M);
-      doc.moveDown(0.15);
-      doc.fontSize(8).font('Helvetica');
-      const yServ = doc.y;
-      doc.text(`Fecha: ${fechaServStr}`, M, yServ);
-      if (horaServStr) {
-        doc.text(`Hora: ${horaServStr}`, M, yServ, { width: CW, align: 'right' });
-      }
-
-      if (cobro.observaciones) {
-        doc.moveDown(0.25);
-        doc.fontSize(6.5).font('Helvetica-Oblique')
-           .text(`Obs: ${cobro.observaciones}`, M, doc.y, { width: CW });
-      }
-
-      doc.moveDown(0.5);
-    }
-
     // ═══════════ DETALLE ═══════════
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
     doc.moveDown(0.3);
@@ -626,20 +808,75 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
     doc.moveDown(0.25);
 
-    // Item — medir la altura real del texto para evitar sobreposición
+    // Items — renderizar múltiples líneas si hay cobro_servicios, sino fallback a línea única
     doc.fontSize(7).font('Helvetica');
-    const conceptoText = cobro.concepto || 'Servicio';
-    const conceptoHeight = doc.heightOfString(conceptoText, { width: CW * 0.55 });
-    const yItem = doc.y;
-    doc.text(conceptoText, M, yItem, { width: CW * 0.55 });
-    doc.text('1', M + CW * 0.58, yItem, { width: 30, align: 'center' });
-    doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M + CW * 0.75, yItem, { width: CW * 0.25, align: 'right' });
 
-    // Mover Y al final real del texto del concepto + margen
-    doc.y = yItem + conceptoHeight + 8;
+    if (ticketItems.length > 0) {
+      for (const ti of ticketItems) {
+        const tiText = ti.concepto || 'Servicio';
+        const tiHeight = doc.heightOfString(tiText, { width: CW * 0.55 });
+        const yTi = doc.y;
+        doc.text(tiText, M, yTi, { width: CW * 0.55 });
+        doc.text(String(ti.cantidad || 1), M + CW * 0.58, yTi, { width: 30, align: 'center' });
+        doc.text(`S/ ${Number(ti.subtotal).toFixed(2)}`, M + CW * 0.75, yTi, { width: CW * 0.25, align: 'right' });
+        doc.y = yTi + tiHeight + 4;
+      }
+      doc.y += 4;
+    } else {
+      // Fallback: línea única (backward compat)
+      const conceptoText = cobro.concepto || 'Servicio';
+      const conceptoHeight = doc.heightOfString(conceptoText, { width: CW * 0.55 });
+      const yItem = doc.y;
+      doc.text(conceptoText, M, yItem, { width: CW * 0.55 });
+      doc.text('1', M + CW * 0.58, yItem, { width: 30, align: 'center' });
+      doc.text(`S/ ${Number(cobro.monto).toFixed(2)}`, M + CW * 0.75, yItem, { width: CW * 0.25, align: 'right' });
+      doc.y = yItem + conceptoHeight + 8;
+    }
 
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
-    doc.moveDown(0.5);
+    doc.moveDown(0.4);
+
+    // ═══════════ FECHA/HORA DEL SERVICIO (después de la descripción) ═══════════
+    const fmtHora12 = (h) => {
+      if (!h) return '';
+      const hParts = String(h).split(':');
+      const hh = parseInt(hParts[0] || 0);
+      const mm = hParts[1] || '00';
+      const ampm = hh < 12 ? 'AM' : 'PM';
+      const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+      return `${h12}:${mm} ${ampm}`;
+    };
+
+    // Recolectar fecha/hora por item (solo si tiene datos)
+    const itemsConFecha = ticketItems.filter(it => it.fecha_servicio);
+
+    if (!esCaja && itemsConFecha.length > 0) {
+      // Fecha y hora compartidas: usar la del primer item
+      const it = itemsConFecha[0];
+      const fechaServStr = new Date(it.fecha_servicio).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
+      const horaServStr = fmtHora12(it.hora_servicio);
+
+      doc.fontSize(7.5).font('Helvetica-Bold')
+         .text('FECHA Y HORA DEL SERVICIO:', M);
+      doc.moveDown(0.15);
+      doc.fontSize(7).font('Helvetica');
+
+      const yServ = doc.y;
+      doc.text(`Fecha: ${fechaServStr}`, M, yServ);
+      if (horaServStr) {
+        doc.text(`Hora: ${horaServStr}`, M, yServ, { width: CW, align: 'right' });
+      }
+      doc.moveDown(0.4);
+    }
+
+    // ═══════════ OBSERVACIONES ═══════════
+    if (cobro.observaciones && String(cobro.observaciones).trim()) {
+      doc.fontSize(7).font('Helvetica-Bold').text('OBSERVACIONES:', M);
+      doc.moveDown(0.1);
+      doc.fontSize(6.5).font('Helvetica-Oblique')
+         .text(String(cobro.observaciones), M, doc.y, { width: CW });
+      doc.moveDown(0.4);
+    }
 
     // ═══════════ TOTAL ═══════════
     doc.fontSize(11).font('Helvetica-Bold');
@@ -665,7 +902,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
         doc.font('Helvetica').fontSize(6.5);
         if (pago.fecha_operacion) {
           const fOp = new Date(pago.fecha_operacion);
-          const fOpStr = fOp.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          const fOpStr = fOp.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
           const hOpStr = pago.hora_operacion ? String(pago.hora_operacion).slice(0, 5) : '';
           doc.text(`      Fecha op.: ${fOpStr}${hOpStr ? '  Hora: ' + hOpStr : ''}`, M);
         } else if (pago.hora_operacion) {

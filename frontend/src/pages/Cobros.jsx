@@ -246,6 +246,40 @@ const [pagos, setPagos] = useState([
 ]);
 const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
+// ========== ITEMS (multi-servicio) ==========
+// Nota: fecha y hora se comparten desde formData (una sola para todos los items).
+// Si hay servicios en fechas/horas distintas, el usuario las anota en Observaciones.
+const [items, setItems] = useState([
+  { tipo_servicio_id: '', precio: '' }
+]);
+
+const agregarItem = () => {
+  setItems([...items, { tipo_servicio_id: '', precio: '' }]);
+};
+
+const eliminarItem = (index) => {
+  if (items.length > 1) {
+    setItems(items.filter((_, i) => i !== index));
+  }
+};
+
+const handleItemChange = (index, field, value) => {
+  const newItems = [...items];
+  newItems[index] = { ...newItems[index], [field]: value };
+  // Auto-popular precio si cambia tipo_servicio_id
+  if (field === 'tipo_servicio_id') {
+    const tipo = tiposServicio.find(t => String(t.value) === String(value));
+    if (tipo && tipo.precio_base != null) {
+      newItems[index].precio = String(tipo.precio_base);
+    }
+  }
+  setItems(newItems);
+};
+
+const calcularTotalItems = () => {
+  return items.reduce((sum, item) => sum + (parseFloat(item.precio) || 0), 0);
+};
+
 // ========== MODO CAJA DEL AMOR ==========
 const CAJA_AMOR_VALUE = 'CAJA_DEL_AMOR'; // valor especial en el select
 const [modoCaja, setModoCaja] = useState(false);
@@ -457,7 +491,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
   };
 
   const validarPagos = () => {
-    const total = parseFloat(formData.precio) || 0;
+    // En modo servicio, el total es la suma de items; en modo caja, es formData.precio
+    const total = modoCaja ? (parseFloat(formData.precio) || 0) : calcularTotalItems();
     const sumaPagos = calcularTotalPagos();
     
     if (Math.abs(total - sumaPagos) > 0.01) {
@@ -491,21 +526,34 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         return setErrors({ general: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
       }
 
-      if (!formData.tipo_servicio_id) {
-        return setErrors({ general: 'Seleccione el tipo de servicio.' });
-      }
-
-      if (!formData.fecha_servicio) {
-        return setErrors({ general: 'Seleccione la fecha.' });
-      }
-
-      // Hora solo requerida en modo servicio
-      if (!modoCaja && !formData.hora_servicio) {
-        return setErrors({ general: 'Seleccione la hora del servicio.' });
-      }
-
-      if (!formData.precio || parseFloat(formData.precio) <= 0) {
-        return setErrors({ general: 'El precio debe ser mayor a 0.' });
+      // Validación de items (modo servicio) o tipo_servicio_id (modo caja)
+      if (!modoCaja) {
+        // Fecha y hora compartidas
+        if (!formData.fecha_servicio) {
+          return setErrors({ general: 'Seleccione la fecha del servicio.' });
+        }
+        if (!formData.hora_servicio) {
+          return setErrors({ general: 'Seleccione la hora del servicio.' });
+        }
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (!item.tipo_servicio_id) {
+            return setErrors({ general: `Seleccione el tipo de servicio en el item ${i + 1}.` });
+          }
+          if (!item.precio || parseFloat(item.precio) <= 0) {
+            return setErrors({ general: `El precio del item ${i + 1} debe ser mayor a 0.` });
+          }
+        }
+      } else {
+        if (!formData.tipo_servicio_id) {
+          return setErrors({ general: 'Seleccione el tipo de servicio.' });
+        }
+        if (!formData.fecha_servicio) {
+          return setErrors({ general: 'Seleccione la fecha.' });
+        }
+        if (!formData.precio || parseFloat(formData.precio) <= 0) {
+          return setErrors({ general: 'El precio debe ser mayor a 0.' });
+        }
       }
 
       if (!validarPagos()) return;
@@ -652,33 +700,30 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           };
         });
 
+        // Construir items para el backend (fecha/hora compartidas desde formData)
+        const itemsPayload = items.map(item => ({
+          tipo_servicio_id: Number(item.tipo_servicio_id),
+          fecha_servicio: formData.fecha_servicio,
+          hora_servicio: formData.hora_servicio,
+          precio: parseFloat(item.precio),
+          observaciones: formData.observaciones || null
+        }));
+
+        const totalMonto = itemsPayload.reduce((s, it) => s + it.precio, 0);
+
         if (editingServicio) {
-          // -------- UPDATE: actualizar servicio existente y su cobro --------
-          const servicioPayload = {
-            tipo_servicio_id: Number(formData.tipo_servicio_id),
-            cliente_id: clienteId,
-            fecha_servicio: formData.fecha_servicio,
-            hora_servicio: formData.hora_servicio,
-            precio: parseFloat(formData.precio),
-            estado: formData.estado || 'programado',
-            observaciones: formData.observaciones || null
-          };
-
-          const servicioResp = await actualizarServicio(editingServicio.id, servicioPayload);
-          if (!servicioResp.success) {
-            throw new Error(servicioResp.message || servicioResp.error || 'Error al actualizar servicio');
-          }
-
+          // -------- UPDATE: actualizar cobro con items[] --------
           if (editingServicio.cobro_id) {
             const cobroPayload = {
               cliente_nombre: formData.cliente_nombre.trim(),
               cliente_dni: formData.cliente_dni?.trim() || '',
               cliente_telefono: formData.cliente_telefono?.trim() || '',
               cliente_email: formData.cliente_email?.trim() || '',
-              concepto: `Servicio: ${tipoLabel}`,
-              monto: parseFloat(formData.precio),
+              items: itemsPayload,
+              monto: totalMonto,
               pagos: pagosPayload,
-              observaciones: formData.observaciones || null
+              observaciones: formData.observaciones || null,
+              estado: formData.estado || 'programado'
             };
 
             const cobroResp = await cobrosService.actualizar(editingServicio.cobro_id, cobroPayload);
@@ -693,35 +738,18 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
             setTimeout(() => abrirTicketPDF(editingServicio.cobro_id), 500);
           }
         } else {
-          // -------- CREATE: crear servicio + cobro + pagos + comprobante --------
-          const servicioPayload = {
-            tipo_servicio_id: Number(formData.tipo_servicio_id),
-            cliente_id: clienteId,
-            fecha_servicio: formData.fecha_servicio,
-            hora_servicio: formData.hora_servicio,
-            precio: parseFloat(formData.precio),
-            estado: 'programado',
-            observaciones: formData.observaciones || null
-          };
-
-          const servicioResp = await crearServicio(servicioPayload);
-          if (!servicioResp.success) {
-            throw new Error(servicioResp.message || 'Error al crear servicio');
-          }
-
-          const servicio_id = servicioResp.data.id;
-
+          // -------- CREATE: crear cobro con items[] (backend crea los servicios) --------
           const cobroPayload = {
-            servicio_id,
             caja_id: null,
             cliente_nombre: formData.cliente_nombre.trim(),
             cliente_dni: formData.cliente_dni?.trim() || '',
             cliente_telefono: formData.cliente_telefono?.trim() || '',
             cliente_email: formData.cliente_email?.trim() || '',
-            concepto: `Servicio: ${tipoLabel}`,
-            monto: parseFloat(formData.precio),
+            items: itemsPayload,
+            monto: totalMonto,
             pagos: pagosPayload,
-            observaciones: formData.observaciones || null
+            observaciones: formData.observaciones || null,
+            estado: formData.estado || 'programado'
           };
 
           const cobroData = await cobrosService.crear(cobroPayload);
@@ -729,7 +757,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
             throw new Error(cobroData.error || 'Error al crear cobro');
           }
 
-          setSuccessMessage('Servicio y cobro registrados exitosamente');
+          setSuccessMessage(items.length > 1
+            ? `${items.length} servicios y cobro registrados exitosamente`
+            : 'Servicio y cobro registrados exitosamente');
 
           if (mostrarTicketAuto && cobroData.data.cobro_id) {
             setTimeout(() => abrirTicketPDF(cobroData.data.cobro_id), 500);
@@ -797,10 +827,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   const handleEdit = async (servicio) => {
     setEditingServicio(servicio);
-    // Normalizar hora "HH:MM:SS" → "HH:MM" (el select usa HH:MM)
-    const horaNormalizada = servicio.hora_servicio
-      ? String(servicio.hora_servicio).slice(0, 5)
-      : '';
+
+    // Fecha/hora compartidas: tomadas del servicio que se está editando
+    const fechaCompartida = servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0, 10) : '';
+    const horaCompartida = servicio.hora_servicio ? String(servicio.hora_servicio).slice(0, 5) : '';
 
     setFormData({
       tipo_servicio_id: servicio.tipo_servicio_id || '',
@@ -809,9 +839,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       cliente_dni: servicio.cliente_dni || '',
       cliente_telefono: servicio.cliente_telefono || '',
       cliente_email: servicio.cliente_email || '',
-      fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0, 10) : '',
-      hora_servicio: horaNormalizada,
-      precio: servicio.precio ?? '',
+      fecha_servicio: fechaCompartida,
+      hora_servicio: horaCompartida,
+      precio: '',
       estado: servicio.estado || 'programado',
       forma_pago: '',
       fecha_operacion: '',
@@ -822,29 +852,66 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     });
     setShowModal(true);
 
-    // Cargar pagos reales del cobro asociado (si existe)
+    // Cargar items y pagos del cobro asociado
+    const defaultPago = [{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }];
+    const defaultItem = [{ tipo_servicio_id: '', precio: '' }];
+
     if (servicio.cobro_id) {
       try {
         const resp = await cobrosService.getById(servicio.cobro_id);
-        if (resp.success && Array.isArray(resp.data?.pagos) && resp.data.pagos.length) {
-          const pagosCargados = resp.data.pagos.map(p => ({
-            metodo_pago_id: p.metodo_pago_id ? String(p.metodo_pago_id) : '',
-            monto: p.monto != null ? String(p.monto) : '',
-            fecha_operacion: p.fecha_operacion ? String(p.fecha_operacion).slice(0, 10) : '',
-            hora_operacion: p.hora_operacion ? String(p.hora_operacion).slice(0, 5) : '',
-            nro_operacion: p.nro_operacion || '',
-            obs_operacion: p.obs_operacion || '',
-          }));
-          setPagos(pagosCargados);
-        } else {
-          setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+        if (resp.success) {
+          // Cargar items (solo tipo_servicio_id y precio, la fecha/hora es compartida)
+          if (Array.isArray(resp.data?.items) && resp.data.items.length) {
+            const itemsCargados = resp.data.items.map(it => ({
+              tipo_servicio_id: it.tipo_servicio_id ? String(it.tipo_servicio_id) : '',
+              precio: it.precio_unitario != null ? String(it.precio_unitario) : '',
+            }));
+            setItems(itemsCargados);
+
+            // Si la fecha/hora compartida del form aún no está seteada, tomarla del primer item
+            const primerItem = resp.data.items[0];
+            if (!fechaCompartida && primerItem?.fecha_servicio) {
+              setFormData(prev => ({
+                ...prev,
+                fecha_servicio: String(primerItem.fecha_servicio).slice(0, 10),
+                hora_servicio: primerItem.hora_servicio ? String(primerItem.hora_servicio).slice(0, 5) : '',
+              }));
+            }
+          } else {
+            // Fallback: usar datos del servicio como item unico
+            setItems([{
+              tipo_servicio_id: servicio.tipo_servicio_id ? String(servicio.tipo_servicio_id) : '',
+              precio: servicio.precio != null ? String(servicio.precio) : '',
+            }]);
+          }
+
+          // Cargar pagos
+          if (Array.isArray(resp.data?.pagos) && resp.data.pagos.length) {
+            const pagosCargados = resp.data.pagos.map(p => ({
+              metodo_pago_id: p.metodo_pago_id ? String(p.metodo_pago_id) : '',
+              monto: p.monto != null ? String(p.monto) : '',
+              fecha_operacion: p.fecha_operacion ? String(p.fecha_operacion).slice(0, 10) : '',
+              hora_operacion: p.hora_operacion ? String(p.hora_operacion).slice(0, 5) : '',
+              nro_operacion: p.nro_operacion || '',
+              obs_operacion: p.obs_operacion || '',
+            }));
+            setPagos(pagosCargados);
+          } else {
+            setPagos(defaultPago);
+          }
         }
       } catch (err) {
-        console.error('Error cargando pagos del cobro:', err);
-        setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+        console.error('Error cargando cobro:', err);
+        setItems(defaultItem);
+        setPagos(defaultPago);
       }
     } else {
-      setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+      // Sin cobro: cargar item del servicio directamente
+      setItems([{
+        tipo_servicio_id: servicio.tipo_servicio_id ? String(servicio.tipo_servicio_id) : '',
+        precio: servicio.precio != null ? String(servicio.precio) : '',
+      }]);
+      setPagos(defaultPago);
     }
   };
   
@@ -921,6 +988,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     });
     setEditingServicio(null);
     setErrors({});
+    setItems([{ tipo_servicio_id: '', precio: '' }]);
     setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     setMostrarTicketAuto(false);
     setModoCaja(false);
@@ -1207,10 +1275,122 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
               )}
 
               <form onSubmit={handleSubmit} className="space-y-4">
-  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
-    {/* === FILA 1: Tipo | Fecha | Hora (solo servicio) | Precio === */}
-    {/* Tipo de Servicio */}
+  {/* === ITEMS DE SERVICIO (repetibles) o campos Caja del Amor === */}
+  {!modoCaja ? (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+          Servicios <span className="text-red-500">*</span>
+        </label>
+        <button
+          type="button"
+          onClick={agregarItem}
+          className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium"
+        >
+          + Agregar servicio
+        </button>
+      </div>
+      {/* Fecha y Hora compartidas para todos los servicios */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+            Fecha del Servicio <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="date"
+            value={formData.fecha_servicio}
+            onChange={(e) => setFormData(prev => ({ ...prev, fecha_servicio: e.target.value }))}
+            className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+            Hora del Servicio <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={formData.hora_servicio}
+            onChange={(e) => setFormData(prev => ({ ...prev, hora_servicio: e.target.value }))}
+            required
+            className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+          >
+            <option value="">Seleccionar</option>
+            {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
+              <option key={`sh-${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
+                {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
+              </option>,
+              <option key={`sh-${hora}:30`} value={`${hora.toString().padStart(2, '0')}:30`}>
+                {`${hora.toString().padStart(2, '0')}:30 ${hora < 12 ? 'AM' : 'PM'}`}
+              </option>
+            ])}
+          </select>
+        </div>
+      </div>
+
+      {/* Items de servicio (solo Tipo + Precio) */}
+      {items.map((item, idx) => (
+        <div key={idx} className="p-3 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Tipo */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Tipo <span className="text-red-500">*</span></label>
+              <select
+                value={item.tipo_servicio_id}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === CAJA_AMOR_VALUE) {
+                    handleTipoChangeWrapper(val);
+                  } else {
+                    handleItemChange(idx, 'tipo_servicio_id', val);
+                  }
+                }}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Seleccionar</option>
+                {tiposServicio.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+                {idx === 0 && <option value={CAJA_AMOR_VALUE}>🎁 Caja del Amor</option>}
+              </select>
+            </div>
+            {/* Precio + eliminar */}
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Precio <span className="text-red-500">*</span></label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={item.precio}
+                  onChange={(e) => handleItemChange(idx, 'precio', e.target.value)}
+                  placeholder="0.00"
+                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+              {items.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => eliminarItem(idx)}
+                  className="self-end px-2 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+                  title="Eliminar servicio"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+      <div className="text-right text-sm font-semibold text-gray-700 dark:text-gray-300">
+        Total servicios: S/ {calcularTotalItems().toFixed(2)}
+      </div>
+    </div>
+  ) : (
+    /* Modo Caja del Amor: campos tipo + fecha + modalidad + precio */
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+    {/* Tipo de Servicio (Caja del Amor) */}
     <div className="sm:col-span-2 lg:col-span-1">
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
         Tipo de Servicio <span className="text-red-500">*</span>
@@ -1218,7 +1398,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       <select
         value={formData.tipo_servicio_id}
         onChange={(e) => handleTipoChangeWrapper(e.target.value)}
-        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.tipo_servicio_id ? 'border-red-500' : 'border-gray-300'}`}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
         required
       >
         <option value="">Seleccionar tipo</option>
@@ -1228,52 +1408,23 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           <option key={tipo.value} value={tipo.value}>{tipo.label}</option>
         ))}
       </select>
-      {errors.tipo_servicio_id && <p className="mt-1 text-sm text-red-600">{errors.tipo_servicio_id}</p>}
     </div>
 
     {/* Fecha */}
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Fecha del Servicio <span className="text-red-500">*</span>
+        Fecha <span className="text-red-500">*</span>
       </label>
       <input
         type="date"
         value={formData.fecha_servicio}
         onChange={(e) => setFormData(prev => ({ ...prev, fecha_servicio: e.target.value }))}
-        className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white ${errors.fecha_servicio ? 'border-red-500' : 'border-gray-300'}`}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
         required
       />
-      {errors.fecha_servicio && <p className="mt-1 text-sm text-red-600">{errors.fecha_servicio}</p>}
     </div>
-
-    {/* Hora — solo en modo servicio */}
-    {!modoCaja && (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Hora <span className="text-red-500">*</span>
-      </label>
-      <select
-        name="hora_servicio"
-        value={formData.hora_servicio}
-        onChange={(e) => setFormData({...formData, hora_servicio: e.target.value})}
-        required
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
-      >
-        <option value="">Seleccionar</option>
-        {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
-          <option key={`${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
-            {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
-          </option>,
-          <option key={`${hora}:30`} value={`${hora.toString().padStart(2, '0')}:30`}>
-            {`${hora.toString().padStart(2, '0')}:30 ${hora < 12 ? 'AM' : 'PM'}`}
-          </option>
-        ])}
-      </select>
-    </div>
-    )}
 
     {/* Modalidad — solo en modo Caja del Amor */}
-    {modoCaja && (
     <div>
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
         Modalidad <span className="text-red-500">*</span>
@@ -1287,7 +1438,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           if (mod) setFormData(prev => ({ ...prev, precio: String(mod.costo) }));
         }}
         required
-        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
+        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
       >
         <option value="">Seleccionar</option>
         {modalidades.map(m => (
@@ -1295,7 +1446,6 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         ))}
       </select>
     </div>
-    )}
 
     {/* Precio */}
     <div>
@@ -1310,7 +1460,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         placeholder="0.00"
       />
     </div>
+    </div>
+  )}
 
+  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     {/* === FILA 2: Cliente | DNI+botón+radio === */}
     {/* Cliente */}
     <div className="lg:col-span-2">
@@ -1579,11 +1732,15 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         </div>
         <div className="text-sm">
           <span className="font-semibold">Total pagos: S/ {calcularTotalPagos().toFixed(2)}</span>
-          {formData.precio && (
-            <span className={`ml-2 ${Math.abs(calcularTotalPagos() - parseFloat(formData.precio)) < 0.01 ? 'text-green-600' : 'text-red-600'}`}>
-              {Math.abs(calcularTotalPagos() - parseFloat(formData.precio)) < 0.01 ? '✓ Coincide' : '⚠️ No coincide'}
+          {(() => {
+            const totalEsperado = modoCaja ? (parseFloat(formData.precio) || 0) : calcularTotalItems();
+            if (!totalEsperado) return null;
+            return (
+            <span className={`ml-2 ${Math.abs(calcularTotalPagos() - totalEsperado) < 0.01 ? 'text-green-600' : 'text-red-600'}`}>
+              {Math.abs(calcularTotalPagos() - totalEsperado) < 0.01 ? '✓ Coincide' : '⚠️ No coincide'}
             </span>
-          )}
+          );
+          })()}
         </div>
       </div>
     </div>

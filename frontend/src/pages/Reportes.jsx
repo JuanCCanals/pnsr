@@ -12,6 +12,19 @@ const fmtMoney = (v) => `S/ ${Number(v || 0).toLocaleString('es-PE', { minimumFr
 const exportXlsx = (rows, name) => {
   if (!rows?.length) return;
   const ws = XLSX.utils.json_to_sheet(rows);
+
+  // Ancho automático por columna: mayor entre header y valores (cap a 50)
+  const headers = Object.keys(rows[0]);
+  ws['!cols'] = headers.map(h => {
+    let maxLen = String(h).length;
+    rows.forEach(r => {
+      const val = r[h];
+      const len = val != null ? String(val).length : 0;
+      if (len > maxLen) maxLen = len;
+    });
+    return { wch: Math.min(maxLen + 2, 50) };
+  });
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Reporte');
   XLSX.writeFile(wb, `${name}_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -191,11 +204,22 @@ const Beneficiados = () => {
 
       {subTab === 'familias' && (
         <>
-          <div className="flex justify-end mb-2"><ExportBtn onClick={() => exportXlsx(familias_rows, 'Beneficiados_Familias')} disabled={!familias_rows.length} /></div>
+          <div className="flex justify-end mb-2"><ExportBtn onClick={() => exportXlsx(
+            familias_rows.map(r => ({
+              'Código': r.codigo,
+              'Titular': r.titular,
+              'Zona': r.zona,
+              'Integrantes': r.integrantes,
+              'Dependientes ≤13a': r.dependientes_menor_13 ?? 0,
+              'Grupo': r.grupo,
+              'Asignada': r.asignada,
+            })),
+            'Beneficiados_Familias'
+          )} disabled={!familias_rows.length} /></div>
           <div className="overflow-x-auto border rounded-lg">
             <table className="min-w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700">
-                <tr>{['Código','Titular','Zona','Integrantes','Grupo','Asignada'].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
+                <tr>{['Código','Titular','Zona','Integrantes','Dependientes ≤13a','Grupo','Asignada'].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y dark:divide-gray-600">
                 {familias_rows.map((r, i) => <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
@@ -203,6 +227,7 @@ const Beneficiados = () => {
                   <td className="px-3 py-2 dark:text-white">{r.titular}</td>
                   <td className="px-3 py-2 dark:text-white">{r.zona}</td>
                   <td className="px-3 py-2 text-center dark:text-white">{r.integrantes}</td>
+                  <td className="px-3 py-2 text-center dark:text-white">{r.dependientes_menor_13 ?? 0}</td>
                   <td className="px-3 py-2 dark:text-white">{r.grupo}</td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full text-xs ${r.asignada==='Sí'?'bg-green-100 text-green-800':'bg-gray-100 text-gray-700'}`}>{r.asignada}</span></td>
                 </tr>)}

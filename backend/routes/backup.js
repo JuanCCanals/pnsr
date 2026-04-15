@@ -447,53 +447,49 @@ function autoCleanBackups(maxBackups = 10) {
 
 // Grupos de tablas permitidos para purga (solo transaccionales, nunca catálogos)
 const PURGE_GROUPS = [
+  // ─── CAJAS DEL AMOR ───
   {
     id: 'cajas_amor',
-    label: 'Cajas del Amor (ventas, cajas, pagos)',
+    label: '🎁 Cajas del Amor (ventas, cajas, pagos)',
     description: 'Elimina ventas, ventas_cajas, ventas_pagos y todas las cajas',
     tables: ['ventas_pagos', 'ventas_cajas', 'ventas', 'cajas'],
   },
   {
-    id: 'servicios_cobros',
-    label: 'Servicios y Cobros (cobros, comprobantes)',
-    description: 'Limpia servicios, cobros, cobros_pagos y comprobantes',
-    tables: ['cobros_pagos', 'comprobantes', 'cobros', 'servicios'],
-  },
-  {
     id: 'familias',
-    label: 'Familias, Integrantes y Zonas',
-    description: 'Limpia familias, integrantes_familia y zonas',
+    label: '🎁 Familias, Integrantes y Zonas',
+    description: 'Limpia familias, integrantes_familia y zonas (Cajas del Amor)',
     tables: ['integrantes_familia', 'familias', 'zonas'],
   },
   {
     id: 'benefactores',
-    label: 'Benefactores',
-    description: 'Limpia la tabla de benefactores',
+    label: '🎁 Benefactores',
+    description: 'Limpia la tabla de benefactores (Cajas del Amor)',
     tables: ['benefactores'],
   },
   {
-    id: 'clientes',
-    label: 'Clientes',
-    description: 'Limpia la tabla de clientes',
-    tables: ['clientes'],
-  },
-  {
     id: 'excedentes',
-    label: 'Excedentes',
-    description: 'Limpia la tabla de excedentes',
+    label: '🎁 Excedentes',
+    description: 'Limpia la tabla de excedentes (Cajas del Amor)',
     tables: ['excedentes'],
   },
   {
     id: 'donaciones_fisicas',
-    label: 'Donaciones Físicas',
-    description: 'Limpia la tabla de donaciones físicas',
+    label: '🎁 Donaciones Físicas',
+    description: 'Limpia la tabla de donaciones físicas (Cajas del Amor)',
     tables: ['donaciones_fisicas'],
   },
+  // ─── SERVICIOS PARROQUIALES ───
   {
-    id: 'auditoria',
-    label: 'Auditoría (logs)',
-    description: 'Limpia los registros de auditoría del sistema',
-    tables: ['auditoria'],
+    id: 'servicios',
+    label: '⛪ Servicios Parroquiales',
+    description: 'Limpia servicios, cobros de servicios, cobro_servicios y comprobantes',
+    tables: ['cobro_servicios', 'cobros_pagos', 'comprobantes', 'cobros', 'servicios'],
+  },
+  {
+    id: 'clientes',
+    label: '⛪ Clientes (feligreses)',
+    description: 'Limpia la tabla de clientes / feligreses (Servicios)',
+    tables: ['clientes'],
   },
 ];
 
