@@ -1137,8 +1137,13 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                     {getTipoLabel(servicio.tipo_servicio_id)}
                   </div>
                   <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {new Date(servicio.fecha_servicio).toLocaleDateString()}
-                    {servicio.hora_servicio && ` - ${servicio.hora_servicio}`}
+                    {(() => {
+                      // Formatear DATE sin timezone (viene como '2026-04-20' del backend)
+                      const s = String(servicio.fecha_servicio || '').slice(0, 10);
+                      const p = s.split('-');
+                      return p.length === 3 ? `${parseInt(p[2])}/${parseInt(p[1])}/${p[0]}` : s;
+                    })()}
+                    {servicio.hora_servicio && ` - ${String(servicio.hora_servicio).slice(0, 5)}`}
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
