@@ -770,6 +770,14 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     // ═══════════ FECHA / HORA DE REGISTRO ═══════════
     const fecha = new Date(cobro.fecha_cobro || Date.now());
     const TZ_LIMA = 'America/Lima';
+    // Helper: formatea DATE string '2026-04-20' → '20/04/2026' sin timezone
+    const fmtDateOnly = (v) => {
+      if (!v) return '—';
+      const s = typeof v === 'string' ? v : (v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
+      const parts = s.slice(0, 10).split('-');
+      if (parts.length !== 3) return String(v);
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    };
     const fechaStr = fecha.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
     const horaStr = fecha.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', timeZone: TZ_LIMA });
 
@@ -853,7 +861,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     if (!esCaja && itemsConFecha.length > 0) {
       // Fecha y hora compartidas: usar la del primer item
       const it = itemsConFecha[0];
-      const fechaServStr = new Date(it.fecha_servicio).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
+      const fechaServStr = fmtDateOnly(it.fecha_servicio);
       const horaServStr = fmtHora12(it.hora_servicio);
 
       doc.fontSize(7.5).font('Helvetica-Bold')
@@ -901,8 +909,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       if (!esEfectivo) {
         doc.font('Helvetica').fontSize(6.5);
         if (pago.fecha_operacion) {
-          const fOp = new Date(pago.fecha_operacion);
-          const fOpStr = fOp.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA });
+          const fOpStr = fmtDateOnly(pago.fecha_operacion);
           const hOpStr = pago.hora_operacion ? String(pago.hora_operacion).slice(0, 5) : '';
           doc.text(`      Fecha op.: ${fOpStr}${hOpStr ? '  Hora: ' + hOpStr : ''}`, M);
         } else if (pago.hora_operacion) {

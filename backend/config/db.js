@@ -15,6 +15,10 @@ const pool = mysql.createPool({
   // Al interpretar los strings como UTC, Node los convierte correctamente
   // al formatearlos con toLocaleString('es-PE') (America/Lima, UTC-5).
   timezone: 'Z',
+  // Columnas DATE (sin hora) se devuelven como strings '2026-04-20'
+  // para evitar que la conversión UTC→Lima desplace al día anterior.
+  // Columnas DATETIME/TIMESTAMP siguen siendo Date de JS (timezone 'Z' aplica).
+  dateStrings: ['DATE'],
 });
 
 module.exports = pool;

@@ -1024,7 +1024,7 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
     if (venta.fecha_devolucion) {
       doc.moveDown(0.2);
       doc.fontSize(7).font('Helvetica-Bold')
-         .text(`Fecha devolución: ${new Date(venta.fecha_devolucion).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: TZ_LIMA })}`, M);
+         .text(`Fecha devolución: ${(() => { const s = typeof venta.fecha_devolucion === 'string' ? venta.fecha_devolucion : (venta.fecha_devolucion ? venta.fecha_devolucion.toISOString().slice(0,10) : ''); const p = s.slice(0,10).split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; })()}`, M);
     }
 
     // Observaciones
