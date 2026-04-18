@@ -98,7 +98,7 @@ router.get('/', authenticateToken, authorizePermission('familias.leer'), async (
     const offset = (page - 1) * limit;
 
 const [rows] = await pool.execute(`
-  SELECT 
+  SELECT
     f.id,
     f.codigo_unico,
     f.nombre_padre,
@@ -112,8 +112,8 @@ const [rows] = await pool.execute(`
     f.updated_at,
     z.nombre as zona_nombre,
     z.abreviatura as zona_abreviatura,
-    0 as total_integrantes,
-    0 as total_cajas
+    (SELECT COUNT(*) FROM integrantes_familia i WHERE i.familia_id = f.id) AS total_integrantes,
+    (SELECT COUNT(*) FROM cajas c WHERE c.familia_id = f.id) AS total_cajas
   FROM familias f
   LEFT JOIN zonas z ON f.zona_id = z.id
   ${whereClause}

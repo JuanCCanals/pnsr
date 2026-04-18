@@ -20,10 +20,12 @@ router.get('/', authenticateToken, authorizePermission('zonas'), async (req, res
         z.numero_familias,
         z.created_at,
         z.updated_at,
-        COUNT(f.id) as familias_registradas
+        (SELECT COUNT(*) FROM familias f WHERE f.zona_id = z.id) AS total_familias_reales,
+        (SELECT COUNT(*) FROM familias f WHERE f.zona_id = z.id AND f.activo = 1) AS familias_activas,
+        (SELECT COUNT(*) FROM cajas c
+          JOIN familias f ON f.id = c.familia_id
+          WHERE f.zona_id = z.id) AS total_cajas
       FROM zonas z
-      LEFT JOIN familias f ON z.id = f.zona_id AND f.activo = 1
-      GROUP BY z.id, z.nombre, z.descripcion, z.abreviatura, z.activo, z.numero_familias, z.created_at, z.updated_at
       ORDER BY z.nombre
     `);
 

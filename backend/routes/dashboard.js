@@ -20,13 +20,14 @@ router.get(
   authorizePermission('dashboard'),
   async (req, res) => {
     try {
-      // 1) Total de cajas de S/40 y S/160, según movimientos registrados
+      // 1) Total de cajas físicas (tabla cajas), por modalidad.
+      //    Modalidad 1 = S/40, Modalidad 2 = S/160
       const [cajasCount] = await pool.execute(`
-        SELECT 
-          SUM(CASE WHEN vc.monto = 40 THEN 1 ELSE 0 END) AS cajas_40,
-          SUM(CASE WHEN vc.monto = 160 THEN 1 ELSE 0 END) AS cajas_160,
+        SELECT
+          SUM(CASE WHEN c.modalidad_id = 1 THEN 1 ELSE 0 END) AS cajas_40,
+          SUM(CASE WHEN c.modalidad_id = 2 THEN 1 ELSE 0 END) AS cajas_160,
           COUNT(*) AS total_cajas
-        FROM ventas_cajas vc
+        FROM cajas c
       `);
 
       // 2) Cajas vendidas (pagadas) y montos
@@ -160,9 +161,9 @@ router.get(
       const [kpisResult] = await pool.execute(`
         SELECT 
           COUNT(s.id) as total_servicios,
-          SUM(CASE WHEN ts.nombre LIKE '%Bautismo%' THEN 1 ELSE 0 END) as bautismos,
+          SUM(CASE WHEN ts.nombre LIKE '%Bauti%' THEN 1 ELSE 0 END) as bautismos,
           SUM(CASE WHEN ts.nombre LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as matrimonios,
-          SUM(CASE WHEN ts.nombre NOT LIKE '%Bautismo%' AND ts.nombre NOT LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as otros_servicios,
+          SUM(CASE WHEN ts.nombre NOT LIKE '%Bauti%' AND ts.nombre NOT LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as otros_servicios,
           COALESCE(SUM(c.monto), 0) as total_recaudado
         FROM servicios s
         LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id

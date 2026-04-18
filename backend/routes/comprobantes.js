@@ -24,22 +24,25 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
       SELECT *
       FROM (
         -- Comprobantes de SERVICIOS
+        -- Concepto: usa c.concepto (soporta multi-item); fallback al tipo_servicio.
+        -- Cliente viene de tabla clientes (NO benefactores).
         SELECT
           'servicio' AS tipo,
           c.id       AS cobro_id,
           c.monto    AS monto,
           c.created_at AS fecha,
-          ts.nombre  AS concepto,
+          COALESCE(c.concepto, ts.nombre) AS concepto,
           cl.nombre  AS beneficiario,
           c.numero_comprobante AS numero_comprobante
         FROM cobros c
-        JOIN servicios s
+        LEFT JOIN servicios s
           ON c.servicio_id = s.id
-        JOIN tipos_servicio ts
+        LEFT JOIN tipos_servicio ts
           ON s.tipo_servicio_id = ts.id
-        LEFT JOIN benefactores cl
+        LEFT JOIN clientes cl
           ON c.cliente_id = cl.id
         WHERE c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          AND c.caja_id IS NULL
 
         UNION ALL
 
