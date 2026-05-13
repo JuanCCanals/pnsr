@@ -83,14 +83,11 @@ export async function consultarDNI(dni, proveedor = 'apisperu') {
 }
 
 /**
- * Consultar RUC en SUNAT (solo APISPeru)
+ * Consultar RUC usando APISPeru (llamada directa)
  */
-export async function consultarRUC(ruc) {
+async function consultarRUC_APISPeru(ruc) {
   if (!APISPERU_TOKEN || APISPERU_TOKEN === 'tu_token_aqui') {
     throw new Error('Token de APISPeru no configurado');
-  }
-  if (!/^\d{11}$/.test(ruc)) {
-    throw new Error('El RUC debe tener 11 dígitos');
   }
 
   const response = await fetch(`${APISPERU_URL}/ruc/${ruc}?token=${APISPERU_TOKEN}`);
@@ -108,8 +105,59 @@ export async function consultarRUC(ruc) {
     nombreComercial: data.nombreComercial,
     direccion: data.direccion,
     estado: data.estado,
-    condicion: data.condicion
+    condicion: data.condicion,
+    // Para reutilizar la misma UI que con DNI
+    nombreCompleto: data.razonSocial || data.nombreComercial || ''
   };
+}
+
+/**
+ * Consultar RUC via proxy backend (apis.net.pe)
+ */
+async function consultarRUC_ApisNetPe(ruc) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`${API_BASE_URL}/cobros/consultar-ruc/${ruc}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => null);
+    throw new Error(err?.error || `Error ${response.status}`);
+  }
+  const result = await response.json();
+  if (!result.success) throw new Error(result.error || 'Error al consultar RUC');
+  return result.data;
+}
+
+/**
+ * Consultar RUC en SUNAT — dispatch según proveedor
+ */
+export async function consultarRUC(ruc, proveedor = 'apisperu') {
+  if (!/^\d{11}$/.test(ruc)) {
+    throw new Error('El RUC debe tener 11 dígitos');
+  }
+  try {
+    if (proveedor === 'apisnetpe') {
+      return await consultarRUC_ApisNetPe(ruc);
+    }
+    return await consultarRUC_APISPeru(ruc);
+  } catch (error) {
+    console.error(`Error consultando RUC (${proveedor}):`, error);
+    throw error;
+  }
+}
+
+/**
+ * Consultar DNI o RUC según longitud del documento (8 ó 11 dígitos)
+ */
+export async function consultarDocumento(doc, proveedor = 'apisperu') {
+  const d = String(doc || '').trim();
+  if (/^\d{8}$/.test(d)) {
+    return await consultarDNI(d, proveedor);
+  }
+  if (/^\d{11}$/.test(d)) {
+    return await consultarRUC(d, proveedor);
+  }
+  throw new Error('Ingrese 8 dígitos (DNI) o 11 dígitos (RUC)');
 }
 
 export default { consultarDNI, consultarRUC };

@@ -1,7 +1,7 @@
 // frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect } from 'react';
 import { cobrosService, metodoPagoService, catalogosService, ventasService } from '../services/api';
-import { consultarDNI } from '../services/dniService'; // â† AGREGAR ESTA LÃNEA
+import { consultarDocumento } from '../services/dniService';
 import { useAuth } from '../contexts/AuthContext';
 
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
@@ -451,24 +451,25 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   // ========== BÃšSQUEDA DNI ==========
   const handleBuscarDNI = async () => {
-    const dni = formData.cliente_dni?.trim();
-    
-    if (!dni || dni.length !== 8) {
-      alert('Ingrese un DNI válido de 8 dígitos');
+    const doc = formData.cliente_dni?.trim();
+
+    if (!doc || (doc.length !== 8 && doc.length !== 11)) {
+      alert('Ingrese 8 dígitos (DNI) o 11 dígitos (RUC)');
       return;
     }
 
     setBuscandoDNI(true);
     try {
-      const resultado = await consultarDNI(dni, dniApi);
+      const resultado = await consultarDocumento(doc, dniApi);
       setFormData(prev => ({
         ...prev,
         cliente_nombre: resultado.nombreCompleto
       }));
-      alert(`✓ Datos encontrados:\n${resultado.nombreCompleto}`);
+      const tipo = doc.length === 11 ? 'RUC' : 'DNI';
+      alert(`✓ ${tipo} encontrado:\n${resultado.nombreCompleto}`);
     } catch (error) {
-      console.error('Error buscando DNI:', error);
-      alert(error.message || 'No se pudo consultar el DNI.\nIngrese el nombre manualmente.');
+      console.error('Error buscando documento:', error);
+      alert(error.message || 'No se pudo consultar el documento.\nIngrese el nombre manualmente.');
     } finally {
       setBuscandoDNI(false);
     }
@@ -529,8 +530,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       }
 
       const dniVal = (formData.cliente_dni || '').trim();
-      if (dniVal && !/^\d{8}$/.test(dniVal)) {
-        return setErrors({ general: 'El DNI debe tener exactamente 8 dígitos numéricos.' });
+      if (dniVal && !/^\d{8}$|^\d{11}$/.test(dniVal)) {
+        return setErrors({ general: 'Documento inválido: debe tener 8 dígitos (DNI) o 11 dígitos (RUC).' });
       }
 
       // Validación de items (modo servicio) o tipo_servicio_id (modo caja)
@@ -1516,25 +1517,25 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       />
     </div>
 
-    {/* DNI + botón + radio API */}
+    {/* DNI / RUC + botón + radio API */}
     <div className="lg:col-span-2">
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DNI</label>
+      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">DNI / RUC</label>
       <div className="flex gap-1">
         <input
           type="text"
           name="cliente_dni"
           value={formData.cliente_dni}
           onChange={(e) => setFormData({...formData, cliente_dni: e.target.value.replace(/\D/g, '')})}
-          maxLength="8"
+          maxLength="11"
           className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm"
-          placeholder="8 dígitos"
+          placeholder="DNI (8) o RUC (11)"
         />
         <button
           type="button"
           onClick={handleBuscarDNI}
-          disabled={buscandoDNI || !formData.cliente_dni || formData.cliente_dni.length !== 8}
+          disabled={buscandoDNI || !formData.cliente_dni || (formData.cliente_dni.length !== 8 && formData.cliente_dni.length !== 11)}
           className="shrink-0 px-2 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-          title="Buscar DNI"
+          title="Buscar DNI o RUC"
         >
           {buscandoDNI ? '🔄' : '🔍'}
         </button>

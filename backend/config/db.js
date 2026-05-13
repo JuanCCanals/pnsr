@@ -2,6 +2,11 @@
 require('dotenv').config();
 const mysql = require('mysql2/promise');
 
+// Forzamos toda la pila a operar en zona horaria Lima (UTC-5):
+//   1. Pool option `timezone: '-05:00'` → mysql2 serializa/deserializa DATETIME asumiendo -05:00
+//   2. `SET time_zone = '-05:00'` en cada conexión nueva → NOW() y CURRENT_TIMESTAMP devuelven hora Lima
+//      sin importar la TZ del SO (UTC en Docker local, CDT en el VPS).
+//   3. `dateStrings: ['DATE']` para columnas DATE (sin hora) → evita desfase de día.
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 3306,
@@ -11,14 +16,13 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  // La BD (contenedor Docker / VPS Linux) almacena DATETIMEs en UTC.
-  // Al interpretar los strings como UTC, Node los convierte correctamente
-  // al formatearlos con toLocaleString('es-PE') (America/Lima, UTC-5).
-  timezone: 'Z',
-  // Columnas DATE (sin hora) se devuelven como strings '2026-04-20'
-  // para evitar que la conversión UTC→Lima desplace al día anterior.
-  // Columnas DATETIME/TIMESTAMP siguen siendo Date de JS (timezone 'Z' aplica).
+  timezone: '-05:00',
   dateStrings: ['DATE'],
+});
+
+// SET time_zone en cada conexión nueva (no en cada query, solo cuando se abre la conexión).
+pool.on('connection', (conn) => {
+  conn.query("SET time_zone = '-05:00'");
 });
 
 module.exports = pool;

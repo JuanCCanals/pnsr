@@ -45,8 +45,9 @@ async function ensureCliente(connection, nombre, dni = '', telefono = '', email 
 
   if (!nom) throw new Error('Nombre requerido');
   if (nom.length > 100) throw new Error('Nombre demasiado largo');
-  if (doc && !/^\d{8}$/.test(doc)) {
-    throw new Error('El DNI debe tener exactamente 8 dígitos numéricos');
+  // Acepta DNI (8 dígitos) o RUC (11 dígitos)
+  if (doc && !/^\d{8}$|^\d{11}$/.test(doc)) {
+    throw new Error('El documento debe tener 8 dígitos (DNI) o 11 dígitos (RUC)');
   }
 
   // 1) Si viene DNI, buscar por DNI
@@ -152,6 +153,50 @@ router.get('/consultar-dni/:dni', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Proxy consultar-dni:', error);
     res.status(500).json({ success: false, error: error.message || 'Error consultando DNI' });
+  }
+});
+
+/**
+ * GET /api/cobros/consultar-ruc/:ruc
+ * Proxy para consultar RUC en apis.net.pe (evita CORS del navegador)
+ * Devuelve razón social, dirección y estado del contribuyente.
+ */
+router.get('/consultar-ruc/:ruc', authenticateToken, async (req, res) => {
+  try {
+    const { ruc } = req.params;
+
+    if (!/^\d{11}$/.test(ruc)) {
+      return res.status(400).json({ success: false, error: 'RUC debe tener 11 dígitos' });
+    }
+
+    const token = process.env.APISNETPE_TOKEN || 'apis-token-5978.vALeomBsDdA-LujBZkqcczBrKxI1CBp6';
+    const url = `https://api.apis.net.pe/v2/sunat/ruc?numero=${ruc}`;
+    const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/json' };
+
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ success: false, error: `Error ${response.status} desde API externa` });
+    }
+
+    const data = await response.json();
+    res.json({
+      success: true,
+      data: {
+        ruc: data.ruc || ruc,
+        razonSocial: data.razonSocial || data.nombre || '',
+        nombreComercial: data.nombreComercial || '',
+        direccion: data.direccion || '',
+        estado: data.estado || '',
+        condicion: data.condicion || '',
+        // Compatibilidad con la interfaz de DNI para reutilizar el campo Cliente
+        nombreCompleto: data.razonSocial || data.nombre || ''
+      }
+    });
+  } catch (error) {
+    console.error('Proxy consultar-ruc:', error);
+    res.status(500).json({ success: false, error: error.message || 'Error consultando RUC' });
   }
 });
 
@@ -819,7 +864,9 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       doc.moveDown(0.1);
       doc.fontSize(7.5).font('Helvetica')
          .text(cobro.cliente_nombre || '—', M);
-      doc.text(`DNI: ${cobro.cliente_dni || '—'}`, M);
+      // Etiqueta DNI/RUC según longitud del documento (8 = DNI, 11 = RUC)
+      const docLbl = (cobro.cliente_dni && String(cobro.cliente_dni).length === 11) ? 'RUC' : 'DNI';
+      doc.text(`${docLbl}: ${cobro.cliente_dni || '—'}`, M);
       doc.moveDown(0.5);
     }
 
