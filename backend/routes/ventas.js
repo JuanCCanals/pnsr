@@ -5,6 +5,11 @@ const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
 const PDFDocument = require('pdfkit');
+const path = require('path');
+const fs = require('fs');
+
+// Ruta absoluta al logo PNSR (mismo logo que usa el ticket de Cobros)
+const LOGO_PATH = path.join(__dirname, '..', '..', 'logos', 'Logo-PNSR-Web1.png');
 
 // Validar suma de pagos
 function validarSumaPagos(pagos, montoTotal) {
@@ -936,12 +941,22 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename=ticket_venta_${venta.recibo || id}.pdf`);
     doc.pipe(res);
 
-    // ═══════════ HEADER ═══════════
-    doc.fontSize(10).font('Helvetica-Bold')
-       .text('PARROQUIA N.S.', { align: 'center' });
-    doc.fontSize(9).font('Helvetica-Bold')
-       .text('DE LA RECONCILIACIÓN', { align: 'center' });
-    doc.moveDown(0.15);
+    // ═══════════ HEADER (LOGO) ═══════════
+    if (fs.existsSync(LOGO_PATH)) {
+      // Logo centrado (mismo ancho que en el ticket de Cobros)
+      const logoWidth = 150;
+      const logoX = (W - logoWidth) / 2;
+      doc.image(LOGO_PATH, logoX, doc.y, { width: logoWidth });
+      // Avanzar Y aproximadamente la altura del logo
+      doc.y += logoWidth * 0.35 + 4;
+    } else {
+      // Fallback: cabecera de texto si el logo no está disponible
+      doc.fontSize(10).font('Helvetica-Bold')
+         .text('PARROQUIA N.S.', { align: 'center' });
+      doc.fontSize(9).font('Helvetica-Bold')
+         .text('DE LA RECONCILIACIÓN', { align: 'center' });
+      doc.moveDown(0.15);
+    }
     doc.fontSize(6.5).font('Helvetica')
        .text('RUC: 20387535684', { align: 'center' });
     doc.fontSize(6)
