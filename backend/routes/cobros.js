@@ -53,15 +53,16 @@ async function ensureCliente(connection, nombre, dni = '', telefono = '', email 
   if (doc) {
     const [r1] = await connection.query('SELECT id FROM clientes WHERE dni = ? LIMIT 1', [doc]);
     if (r1.length) {
-      // Actualizar telefono/email si vienen
-      if (tel || mail) {
-        const sets = []; const vals = [];
-        if (tel) { sets.push('telefono = ?'); vals.push(tel); }
-        if (mail) { sets.push('email = ?'); vals.push(mail); }
-        if (sets.length) {
-          vals.push(r1[0].id);
-          await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
-        }
+      // Actualizar nombre, telefono y email si vienen (siempre refrescar el nombre
+      // — antes se quedaba pegado el nombre original aunque ahora APISPeru devuelva
+      // el nombre completo)
+      const sets = []; const vals = [];
+      if (nom) { sets.push('nombre = ?'); vals.push(nom); }
+      if (tel) { sets.push('telefono = ?'); vals.push(tel); }
+      if (mail) { sets.push('email = ?'); vals.push(mail); }
+      if (sets.length) {
+        vals.push(r1[0].id);
+        await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
       }
       return r1[0].id;
     }
@@ -243,7 +244,12 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
       const tiposMap = {};
       tiposRows.forEach(t => { tiposMap[t.id] = t.nombre; });
 
-      monto = items.reduce((sum, i) => sum + parseFloat(i.precio || 0), 0);
+      // Subtotal por item = cantidad × precio (mínimo cantidad = 1)
+      monto = items.reduce((sum, i) => {
+        const cant = Math.max(parseInt(i.cantidad, 10) || 1, 1);
+        const precio = parseFloat(i.precio || 0);
+        return sum + (cant * precio);
+      }, 0);
       const labels = items.map(i => tiposMap[i.tipo_servicio_id] || 'Servicio');
       concepto = labels.join(' + ');
     } else {
@@ -313,7 +319,12 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
       tiposRows2.forEach(t => { tiposMap2[t.id] = t.nombre; });
 
       for (const item of items) {
-        // Crear servicio individual
+        // Crear servicio individual.
+        // `servicios.precio` guarda el SUBTOTAL (cantidad × precio_unitario),
+        // así el listado muestra el monto real cobrado por este servicio.
+        const cantSvc = Math.max(parseInt(item.cantidad, 10) || 1, 1);
+        const precioUnitSvc = parseFloat(item.precio || 0);
+        const subtotalSvc = cantSvc * precioUnitSvc;
         const [svcResult] = await connection.execute(
           `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -322,7 +333,7 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
             item.tipo_servicio_id,
             item.fecha_servicio || null,
             item.hora_servicio || null,
-            item.precio,
+            subtotalSvc,
             item.observaciones || null,
             estadoFinal
           ]
@@ -330,11 +341,11 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
         const newServicioId = svcResult.insertId;
         const itemConcepto = tiposMap2[item.tipo_servicio_id] || 'Servicio';
 
-        // Insertar en cobro_servicios
+        // Insertar en cobro_servicios reutilizando cantSvc/precioUnitSvc/subtotalSvc
         await connection.execute(
           `INSERT INTO cobro_servicios (cobro_id, servicio_id, concepto, cantidad, precio_unitario, subtotal)
-           VALUES (?, ?, ?, 1, ?, ?)`,
-          [cobro_id, newServicioId, itemConcepto, item.precio, item.precio]
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [cobro_id, newServicioId, itemConcepto, cantSvc, precioUnitSvc, subtotalSvc]
         );
       }
     } else if (servicio_id) {
@@ -460,7 +471,12 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
       const tiposMap = {};
       tiposRows.forEach(t => { tiposMap[t.id] = t.nombre; });
 
-      monto = items.reduce((sum, i) => sum + parseFloat(i.precio || 0), 0);
+      // Subtotal por item = cantidad × precio (mínimo cantidad = 1)
+      monto = items.reduce((sum, i) => {
+        const cant = Math.max(parseInt(i.cantidad, 10) || 1, 1);
+        const precio = parseFloat(i.precio || 0);
+        return sum + (cant * precio);
+      }, 0);
       const labels = items.map(i => tiposMap[i.tipo_servicio_id] || 'Servicio');
       concepto = labels.join(' + ');
     } else {
@@ -510,6 +526,9 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
 
       // Crear nuevos servicios e insertar en cobro_servicios
       for (const item of items) {
+        const cantSvc = Math.max(parseInt(item.cantidad, 10) || 1, 1);
+        const precioUnitSvc = parseFloat(item.precio || 0);
+        const subtotalSvc = cantSvc * precioUnitSvc;
         const [svcResult] = await connection.execute(
           `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -518,7 +537,7 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
             item.tipo_servicio_id,
             item.fecha_servicio || null,
             item.hora_servicio || null,
-            item.precio,
+            subtotalSvc,
             item.observaciones || null,
             estadoFinal
           ]
@@ -528,8 +547,8 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
 
         await connection.execute(
           `INSERT INTO cobro_servicios (cobro_id, servicio_id, concepto, cantidad, precio_unitario, subtotal)
-           VALUES (?, ?, ?, 1, ?, ?)`,
-          [id, newServicioId, itemConcepto, item.precio, item.precio]
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [id, newServicioId, itemConcepto, cantSvc, precioUnitSvc, subtotalSvc]
         );
       }
 
@@ -818,7 +837,18 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.3).stroke();
     doc.moveDown(0.25);
 
-    // Items — renderizar múltiples líneas si hay cobro_servicios, sino fallback a línea única
+    // Helper formato hora 12h con AM/PM
+    const fmtHora12 = (h) => {
+      if (!h) return '';
+      const hParts = String(h).split(':');
+      const hh = parseInt(hParts[0] || 0);
+      const mm = hParts[1] || '00';
+      const ampm = hh < 12 ? 'AM' : 'PM';
+      const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+      return `${h12}:${mm} ${ampm}`;
+    };
+
+    // Items — cada uno muestra su concepto, fecha+hora debajo en itálica, y precios
     doc.fontSize(7).font('Helvetica');
 
     if (ticketItems.length > 0) {
@@ -826,12 +856,28 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
         const tiText = ti.concepto || 'Servicio';
         const tiHeight = doc.heightOfString(tiText, { width: CW * 0.55 });
         const yTi = doc.y;
+        // Concepto + cantidad + subtotal en la misma línea
+        doc.font('Helvetica').fontSize(7);
         doc.text(tiText, M, yTi, { width: CW * 0.55 });
         doc.text(String(ti.cantidad || 1), M + CW * 0.58, yTi, { width: 30, align: 'center' });
         doc.text(`S/ ${Number(ti.subtotal).toFixed(2)}`, M + CW * 0.75, yTi, { width: CW * 0.25, align: 'right' });
-        doc.y = yTi + tiHeight + 4;
+        doc.y = yTi + tiHeight + 1;
+
+        // Fecha/hora del item (debajo en itálica pequeña)
+        if (ti.fecha_servicio) {
+          const fechaItem = fmtDateOnly(ti.fecha_servicio);
+          const horaItem = fmtHora12(ti.hora_servicio);
+          const detalle = horaItem
+            ? `  ↳ ${fechaItem}  ${horaItem}`
+            : `  ↳ ${fechaItem}`;
+          doc.font('Helvetica-Oblique').fontSize(6).fillColor('#555');
+          doc.text(detalle, M, doc.y, { width: CW });
+          doc.fillColor('#000');
+          doc.moveDown(0.15);
+        }
+        doc.moveDown(0.1);
       }
-      doc.y += 4;
+      doc.moveDown(0.2);
     } else {
       // Fallback: línea única (backward compat)
       const conceptoText = cobro.concepto || 'Servicio';
@@ -845,39 +891,6 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     doc.moveTo(M, doc.y).lineTo(W - M, doc.y).lineWidth(0.5).stroke();
     doc.moveDown(0.4);
-
-    // ═══════════ FECHA/HORA DEL SERVICIO (después de la descripción) ═══════════
-    const fmtHora12 = (h) => {
-      if (!h) return '';
-      const hParts = String(h).split(':');
-      const hh = parseInt(hParts[0] || 0);
-      const mm = hParts[1] || '00';
-      const ampm = hh < 12 ? 'AM' : 'PM';
-      const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
-      return `${h12}:${mm} ${ampm}`;
-    };
-
-    // Recolectar fecha/hora por item (solo si tiene datos)
-    const itemsConFecha = ticketItems.filter(it => it.fecha_servicio);
-
-    if (!esCaja && itemsConFecha.length > 0) {
-      // Fecha y hora compartidas: usar la del primer item
-      const it = itemsConFecha[0];
-      const fechaServStr = fmtDateOnly(it.fecha_servicio);
-      const horaServStr = fmtHora12(it.hora_servicio);
-
-      doc.fontSize(7.5).font('Helvetica-Bold')
-         .text('FECHA Y HORA DEL SERVICIO:', M);
-      doc.moveDown(0.15);
-      doc.fontSize(7).font('Helvetica');
-
-      const yServ = doc.y;
-      doc.text(`Fecha: ${fechaServStr}`, M, yServ);
-      if (horaServStr) {
-        doc.text(`Hora: ${horaServStr}`, M, yServ, { width: CW, align: 'right' });
-      }
-      doc.moveDown(0.4);
-    }
 
     // ═══════════ OBSERVACIONES ═══════════
     if (cobro.observaciones && String(cobro.observaciones).trim()) {

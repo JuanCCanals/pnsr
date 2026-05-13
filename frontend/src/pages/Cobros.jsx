@@ -247,14 +247,14 @@ const [pagos, setPagos] = useState([
 const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
 // ========== ITEMS (multi-servicio) ==========
-// Nota: fecha y hora se comparten desde formData (una sola para todos los items).
-// Si hay servicios en fechas/horas distintas, el usuario las anota en Observaciones.
+// Cada servicio tiene su propia fecha, hora, cantidad y precio unitario.
+// El subtotal por item se calcula como cantidad × precio.
 const [items, setItems] = useState([
-  { tipo_servicio_id: '', precio: '' }
+  { tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }
 ]);
 
 const agregarItem = () => {
-  setItems([...items, { tipo_servicio_id: '', precio: '' }]);
+  setItems([...items, { tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }]);
 };
 
 const eliminarItem = (index) => {
@@ -276,8 +276,15 @@ const handleItemChange = (index, field, value) => {
   setItems(newItems);
 };
 
+// Subtotal por item = cantidad × precio (mínimo cantidad = 1)
+const subtotalItem = (item) => {
+  const cant = Math.max(parseInt(item.cantidad, 10) || 1, 1);
+  const precio = parseFloat(item.precio) || 0;
+  return cant * precio;
+};
+
 const calcularTotalItems = () => {
-  return items.reduce((sum, item) => sum + (parseFloat(item.precio) || 0), 0);
+  return items.reduce((sum, item) => sum + subtotalItem(item), 0);
 };
 
 // ========== MODO CAJA DEL AMOR ==========
@@ -528,17 +535,21 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
       // Validación de items (modo servicio) o tipo_servicio_id (modo caja)
       if (!modoCaja) {
-        // Fecha y hora compartidas
-        if (!formData.fecha_servicio) {
-          return setErrors({ general: 'Seleccione la fecha del servicio.' });
-        }
-        if (!formData.hora_servicio) {
-          return setErrors({ general: 'Seleccione la hora del servicio.' });
-        }
+        // Cada item tiene su propia fecha, hora, cantidad y precio
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
           if (!item.tipo_servicio_id) {
             return setErrors({ general: `Seleccione el tipo de servicio en el item ${i + 1}.` });
+          }
+          if (!item.fecha_servicio) {
+            return setErrors({ general: `Seleccione la fecha del item ${i + 1}.` });
+          }
+          if (!item.hora_servicio) {
+            return setErrors({ general: `Seleccione la hora del item ${i + 1}.` });
+          }
+          const cant = parseInt(item.cantidad, 10);
+          if (!cant || cant < 1) {
+            return setErrors({ general: `La cantidad del item ${i + 1} debe ser al menos 1.` });
           }
           if (!item.precio || parseFloat(item.precio) <= 0) {
             return setErrors({ general: `El precio del item ${i + 1} debe ser mayor a 0.` });
@@ -700,16 +711,22 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           };
         });
 
-        // Construir items para el backend (fecha/hora compartidas desde formData)
-        const itemsPayload = items.map(item => ({
-          tipo_servicio_id: Number(item.tipo_servicio_id),
-          fecha_servicio: formData.fecha_servicio,
-          hora_servicio: formData.hora_servicio,
-          precio: parseFloat(item.precio),
-          observaciones: formData.observaciones || null
-        }));
+        // Construir items para el backend — cada item con su fecha/hora/cantidad propia
+        const itemsPayload = items.map(item => {
+          const cantidad = Math.max(parseInt(item.cantidad, 10) || 1, 1);
+          const precioUnit = parseFloat(item.precio) || 0;
+          return {
+            tipo_servicio_id: Number(item.tipo_servicio_id),
+            fecha_servicio: item.fecha_servicio,
+            hora_servicio: item.hora_servicio,
+            cantidad,
+            precio: precioUnit,
+            subtotal: cantidad * precioUnit,
+            observaciones: formData.observaciones || null
+          };
+        });
 
-        const totalMonto = itemsPayload.reduce((s, it) => s + it.precio, 0);
+        const totalMonto = itemsPayload.reduce((s, it) => s + it.subtotal, 0);
 
         if (editingServicio) {
           // -------- UPDATE: actualizar cobro con items[] --------
@@ -854,33 +871,29 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
     // Cargar items y pagos del cobro asociado
     const defaultPago = [{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }];
-    const defaultItem = [{ tipo_servicio_id: '', precio: '' }];
+    const defaultItem = [{ tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }];
 
     if (servicio.cobro_id) {
       try {
         const resp = await cobrosService.getById(servicio.cobro_id);
         if (resp.success) {
-          // Cargar items (solo tipo_servicio_id y precio, la fecha/hora es compartida)
+          // Cargar items con todos sus campos (cada uno con su fecha, hora, cantidad, precio)
           if (Array.isArray(resp.data?.items) && resp.data.items.length) {
             const itemsCargados = resp.data.items.map(it => ({
               tipo_servicio_id: it.tipo_servicio_id ? String(it.tipo_servicio_id) : '',
+              fecha_servicio: it.fecha_servicio ? String(it.fecha_servicio).slice(0, 10) : '',
+              hora_servicio: it.hora_servicio ? String(it.hora_servicio).slice(0, 5) : '',
+              cantidad: it.cantidad != null ? Number(it.cantidad) : 1,
               precio: it.precio_unitario != null ? String(it.precio_unitario) : '',
             }));
             setItems(itemsCargados);
-
-            // Si la fecha/hora compartida del form aún no está seteada, tomarla del primer item
-            const primerItem = resp.data.items[0];
-            if (!fechaCompartida && primerItem?.fecha_servicio) {
-              setFormData(prev => ({
-                ...prev,
-                fecha_servicio: String(primerItem.fecha_servicio).slice(0, 10),
-                hora_servicio: primerItem.hora_servicio ? String(primerItem.hora_servicio).slice(0, 5) : '',
-              }));
-            }
           } else {
             // Fallback: usar datos del servicio como item unico
             setItems([{
               tipo_servicio_id: servicio.tipo_servicio_id ? String(servicio.tipo_servicio_id) : '',
+              fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0, 10) : '',
+              hora_servicio: servicio.hora_servicio ? String(servicio.hora_servicio).slice(0, 5) : '',
+              cantidad: 1,
               precio: servicio.precio != null ? String(servicio.precio) : '',
             }]);
           }
@@ -909,6 +922,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       // Sin cobro: cargar item del servicio directamente
       setItems([{
         tipo_servicio_id: servicio.tipo_servicio_id ? String(servicio.tipo_servicio_id) : '',
+        fecha_servicio: servicio.fecha_servicio ? String(servicio.fecha_servicio).slice(0, 10) : '',
+        hora_servicio: servicio.hora_servicio ? String(servicio.hora_servicio).slice(0, 5) : '',
+        cantidad: 1,
         precio: servicio.precio != null ? String(servicio.precio) : '',
       }]);
       setPagos(defaultPago);
@@ -988,7 +1004,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     });
     setEditingServicio(null);
     setErrors({});
-    setItems([{ tipo_servicio_id: '', precio: '' }]);
+    setItems([{ tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }]);
     setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     setMostrarTicketAuto(false);
     setModoCaja(false);
@@ -1296,50 +1312,15 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           + Agregar servicio
         </button>
       </div>
-      {/* Fecha y Hora compartidas para todos los servicios */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/40">
-        <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-            Fecha del Servicio <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="date"
-            value={formData.fecha_servicio}
-            onChange={(e) => setFormData(prev => ({ ...prev, fecha_servicio: e.target.value }))}
-            className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-            Hora del Servicio <span className="text-red-500">*</span>
-          </label>
-          <select
-            value={formData.hora_servicio}
-            onChange={(e) => setFormData(prev => ({ ...prev, hora_servicio: e.target.value }))}
-            required
-            className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
-          >
-            <option value="">Seleccionar</option>
-            {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
-              <option key={`sh-${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
-                {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
-              </option>,
-              <option key={`sh-${hora}:30`} value={`${hora.toString().padStart(2, '0')}:30`}>
-                {`${hora.toString().padStart(2, '0')}:30 ${hora < 12 ? 'AM' : 'PM'}`}
-              </option>
-            ])}
-          </select>
-        </div>
-      </div>
-
-      {/* Items de servicio (solo Tipo + Precio) */}
+      {/* Items de servicio — cada uno con su Tipo, Fecha, Hora, Cant, Precio, Subtotal */}
       {items.map((item, idx) => (
         <div key={idx} className="p-3 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/40">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Tipo */}
-            <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Tipo <span className="text-red-500">*</span></label>
+          {/* Fila 1: Tipo + botón eliminar */}
+          <div className="flex gap-2 mb-2">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Tipo de Servicio <span className="text-red-500">*</span>
+              </label>
               <select
                 value={item.tipo_servicio_id}
                 onChange={(e) => {
@@ -1356,35 +1337,83 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                 {tiposServicio.map(t => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
-                {/* 🎁 Caja del Amor — opción retirada del select para que se use desde Gestión.
-                    La lógica de modoCaja y el código relacionado se conserva por si se reactiva. */}
+                {/* 🎁 Caja del Amor — opción retirada del select. */}
               </select>
             </div>
-            {/* Precio + eliminar */}
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Precio <span className="text-red-500">*</span></label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={item.precio}
-                  onChange={(e) => handleItemChange(idx, 'precio', e.target.value)}
-                  placeholder="0.00"
-                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
-                />
-              </div>
-              {items.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => eliminarItem(idx)}
-                  className="self-end px-2 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
-                  title="Eliminar servicio"
-                >
-                  🗑️
-                </button>
-              )}
+            {items.length > 1 && (
+              <button
+                type="button"
+                onClick={() => eliminarItem(idx)}
+                className="self-end px-2 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+                title="Eliminar servicio"
+              >
+                🗑️
+              </button>
+            )}
+          </div>
+          {/* Fila 2: Fecha + Hora + Cantidad + Precio */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Fecha <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="date"
+                value={item.fecha_servicio || ''}
+                onChange={(e) => handleItemChange(idx, 'fecha_servicio', e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+              />
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Hora <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={item.hora_servicio || ''}
+                onChange={(e) => handleItemChange(idx, 'hora_servicio', e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Seleccionar</option>
+                {Array.from({ length: 15 }, (_, i) => 7 + i).flatMap(hora => [
+                  <option key={`${idx}-h${hora}:00`} value={`${hora.toString().padStart(2, '0')}:00`}>
+                    {`${hora.toString().padStart(2, '0')}:00 ${hora < 12 ? 'AM' : 'PM'}`}
+                  </option>,
+                  <option key={`${idx}-h${hora}:30`} value={`${hora.toString().padStart(2, '0')}:30`}>
+                    {`${hora.toString().padStart(2, '0')}:30 ${hora < 12 ? 'AM' : 'PM'}`}
+                  </option>
+                ])}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Cant <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={item.cantidad ?? 1}
+                onChange={(e) => handleItemChange(idx, 'cantidad', e.target.value)}
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Precio unit. <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={item.precio}
+                onChange={(e) => handleItemChange(idx, 'precio', e.target.value)}
+                placeholder="0.00"
+                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+          </div>
+          <div className="text-right mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Subtotal: <span className="font-semibold">S/ {subtotalItem(item).toFixed(2)}</span>
           </div>
         </div>
       ))}
