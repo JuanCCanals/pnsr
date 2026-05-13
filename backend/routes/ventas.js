@@ -13,6 +13,16 @@ function validarSumaPagos(pagos, montoTotal) {
   return diferencia <= 0.01; // Tolerancia de 1 centavo
 }
 
+// Generar el siguiente correlativo para una serie (T002 = Cajas del Amor).
+// Lee desde la tabla `ventas` (a diferencia de cobros.js que lee de `comprobantes`).
+async function generarCorrelativoVenta(conn, serie = 'T002') {
+  const [rows] = await conn.query(
+    'SELECT MAX(correlativo) AS max_corr FROM ventas WHERE serie = ?',
+    [serie]
+  );
+  return (rows[0]?.max_corr || 0) + 1;
+}
+
 // Utilidad: obtener caja por c.codigo o por f.codigo_unico
 async function getCajaByCodigo(connOrCodigo, maybeCodigo) {
   let conn = pool;
@@ -325,12 +335,20 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
       return res.status(400).json({ success: false, error: 'Recibo ya registrado' });
     }
 
+    // Generar correlativo de comprobante de Caja del Amor (serie T002).
+    // El "recibo" lo escribe el usuario (control interno); este número es el
+    // comprobante formal que sale impreso en el ticket.
+    const serieVenta = 'T002';
+    const correlativoVenta = await generarCorrelativoVenta(conn, serieVenta);
+    const numeroComprobanteVenta = `${serieVenta}-${String(correlativoVenta).padStart(8, '0')}`;
+
     // Insert cabecera en ventas
     const [vIns] = await conn.query(
-      `INSERT INTO ventas 
+      `INSERT INTO ventas
         (recibo, fecha, modalidad_id, punto_venta_id, forma_pago, estado, monto, moneda,
-         benefactor_id, fecha_devolucion, observaciones, fecha_operacion, hora_operacion, nro_operacion)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         benefactor_id, fecha_devolucion, observaciones, fecha_operacion, hora_operacion, nro_operacion,
+         serie, correlativo, numero_comprobante)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         String(recibo).trim(),
         fecha,
@@ -345,7 +363,10 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
         observaciones ? String(observaciones).slice(0, 62) : null,
         pagoResumen?.fecha_operacion || null,
         pagoResumen?.hora_operacion || null,
-        pagoResumen?.nro_operacion ? String(pagoResumen.nro_operacion).slice(0, 32) : null
+        pagoResumen?.nro_operacion ? String(pagoResumen.nro_operacion).slice(0, 32) : null,
+        serieVenta,
+        correlativoVenta,
+        numeroComprobanteVenta
       ]
     );
     const ventaId = vIns.insertId;
@@ -409,6 +430,9 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
 
 
     // ventas_cajas + actualizar cajas
+    // El monto de CADA caja es el costo base de la modalidad (NO el monto total
+    // de la venta, que podría incluir excedentes o multiples cajas).
+    const costoUnitarioCaja = is40 ? 40 : (is160 ? 160 : 0);
     for (const c of cajasResueltas) {
       await conn.query(
         `INSERT INTO ventas_cajas
@@ -421,7 +445,7 @@ router.post('/', authenticateToken, authorizePermission('venta_cajas.crear'), as
           modalidad_id,
           punto_venta_id,
           req.user?.id || 1,
-          montoVenta,
+          costoUnitarioCaja,
           moneda,
           fecha,
           'PAGADO'
@@ -850,6 +874,7 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
       SELECT v.id, v.recibo, v.fecha, v.monto, v.moneda, v.forma_pago, v.estado,
              v.observaciones, v.fecha_operacion, v.hora_operacion, v.nro_operacion,
              v.benefactor_id, v.fecha_devolucion,
+             v.serie, v.correlativo, v.numero_comprobante,
              b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono,
              b.email AS benefactor_email, b.dni AS benefactor_dni,
              cm.nombre AS modalidad_nombre
@@ -897,9 +922,9 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
       errorCorrectionLevel: 'M',
     });
 
-    // PDF 80mm = 226.77pt
-    const W = 226.77;
-    const M = 10;
+    // PDF 72mm = 204pt — área de impresión efectiva de la Epson TM-T20III
+    const W = 204;
+    const M = 8;
     const CW = W - M * 2;
 
     const doc = new PDFDocument({
@@ -933,8 +958,16 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
     doc.fontSize(9).font('Helvetica-Bold')
        .text('COMPROBANTE - CAJA DEL AMOR', { align: 'center' });
     doc.moveDown(0.15);
+    // Número de comprobante formal (T002-XXXXXXXX). Si por algún motivo
+    // no existe (registros antiguos), cae al recibo manual del usuario.
+    const numeroFormal = venta.numero_comprobante || `Recibo: ${venta.recibo || '—'}`;
     doc.fontSize(8).font('Helvetica-Bold')
-       .text(`Recibo: ${venta.recibo || '—'}`, { align: 'center' });
+       .text(`N° ${numeroFormal}`, { align: 'center' });
+    if (venta.recibo && venta.numero_comprobante) {
+      // También mostrar el recibo manual (control interno del usuario)
+      doc.fontSize(6.5).font('Helvetica')
+         .text(`Recibo: ${venta.recibo}`, { align: 'center' });
+    }
     if (venta.modalidad_nombre) {
       doc.fontSize(7).font('Helvetica')
          .text(`Modalidad: ${venta.modalidad_nombre}`, { align: 'center' });

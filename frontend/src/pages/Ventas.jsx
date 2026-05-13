@@ -146,11 +146,21 @@ export default function Ventas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // set monto when modalidad changes
+  // set monto when modalidad changes (también recalcula al agregar/quitar cajas)
+  // Para modalidad S/40: monto = costo × cantidad de cajas válidas.
+  // Para modalidad S/160: monto fijo = 160 (paquete sin cajas físicas).
   useEffect(() => {
     const mod = modalidades.find((m) => m.id === modalidadId);
-    if (mod) setMonto(String(Number(mod.costo || 0).toFixed(2)));
-  }, [modalidadId, modalidades]);
+    if (!mod) return;
+    const costo = Number(mod.costo || 0);
+    const cantidadCajas = Array.isArray(items) ? items.filter(i => i.ok || i.codigo).length : 0;
+    if (costo === 40) {
+      const total = costo * Math.max(cantidadCajas, 1);
+      setMonto(String(total.toFixed(2)));
+    } else {
+      setMonto(String(costo.toFixed(2)));
+    }
+  }, [modalidadId, modalidades, items]);
 
   // Ajusta estado por defecto según modalidad (solo al CREAR)
   useEffect(() => {
@@ -327,6 +337,31 @@ export default function Ventas() {
     setEditId(null);
     resetModal();
     setShowModal(true);
+  };
+
+  // Abrir ticket PDF de una venta (descarga blob con auth y abre en nueva pestaña)
+  const imprimirTicket = async (ventaId) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setMsg({ type: 'error', text: 'Sesión expirada. Inicia sesión nuevamente.' });
+        return;
+      }
+      const res = await fetch(`/api/ventas/${ventaId}/ticket`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Error ${res.status} al generar ticket`);
+      }
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank');
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 5000);
+    } catch (err) {
+      console.error('Error imprimiendo ticket de venta:', err);
+      setMsg({ type: 'error', text: err.message || 'No se pudo generar el ticket' });
+    }
   };
 
   const openEditModal = async (r) => {
@@ -774,12 +809,21 @@ export default function Ventas() {
                     </td>
 
                     <td className="px-5 py-3 whitespace-nowrap">
-                      {canUpdate && <button
-                        className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
-                        onClick={() => openEditModal(r)}
-                      >
-                        Modificar
-                      </button>}
+                      <div className="flex gap-2">
+                        {canUpdate && <button
+                          className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
+                          onClick={() => openEditModal(r)}
+                        >
+                          Modificar
+                        </button>}
+                        <button
+                          className="px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                          onClick={() => imprimirTicket(r.id)}
+                          title="Imprimir ticket 80mm"
+                        >
+                          🖨️ Imprimir ticket
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

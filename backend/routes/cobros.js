@@ -716,9 +716,11 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
       errorCorrectionLevel: 'M',
     });
 
-    // PDF 80mm = 226.77pt
-    const W = 226.77;
-    const M = 10; // margen lateral
+    // PDF 72mm = 204pt — área de impresión efectiva de la Epson TM-T20III
+    // (el papel es 80mm pero la cabeza imprime solo 72mm = 576 dots @ 203dpi).
+    // Antes era 226.77pt y cortaba el contenido por la derecha.
+    const W = 204;
+    const M = 8; // margen lateral (reducido para más contenido)
     const CW = W - M * 2; // content width
 
     const doc = new PDFDocument({

@@ -1356,7 +1356,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                 {tiposServicio.map(t => (
                   <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
-                {idx === 0 && <option value={CAJA_AMOR_VALUE}>🎁 Caja del Amor</option>}
+                {/* 🎁 Caja del Amor — opción retirada del select para que se use desde Gestión.
+                    La lógica de modoCaja y el código relacionado se conserva por si se reactiva. */}
               </select>
             </div>
             {/* Precio + eliminar */}
