@@ -929,7 +929,7 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
 
     // PDF 72mm = 204pt — área de impresión efectiva de la Epson TM-T20III
     const W = 204;
-    const M = 8;
+    const M = 14; // margen lateral ~5mm — "respiro" izq/der
     const CW = W - M * 2;
 
     const doc = new PDFDocument({
@@ -1103,6 +1103,9 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
 
     doc.fontSize(7).font('Helvetica-Bold')
        .text(footerText, { align: 'center', width: CW });
+
+    // Respiro inferior ~10mm antes del corte de papel
+    doc.moveDown(2.5);
 
     doc.end();
 

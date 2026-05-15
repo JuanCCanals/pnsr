@@ -158,15 +158,20 @@ function authorizePermission(requiredPermissions) {
 
       // Verificar si el usuario tiene al menos uno de los permisos requeridos
       const hasPermission = permissions.some(perm => {
-        // Si el permiso es solo el módulo (ej: 'zonas'), verificar si tiene algún permiso de ese módulo
+        // Si el permiso es solo el módulo (ej: 'zonas' o 'registrar-servicios'),
+        // verificar si tiene algún permiso de ese módulo (normalizamos guiones a underscores).
         if (!perm.includes('.') && !perm.includes('_')) {
-          return Array.from(userPermissions).some(up => up.startsWith(`${perm}_`));
+          const modSlug = perm.replace(/-/g, '_');
+          return Array.from(userPermissions).some(up => up.startsWith(`${modSlug}_`));
         }
 
-        // Convertir formato 'modulo.accion' a 'modulo_accion' para compatibilidad con BD
-        const permSlug = perm.replace('.', '_');
+        // Convertir formato 'modulo.accion' / 'modulo-x.accion' a 'modulo_x_accion'
+        // para que coincida con el slug en BD (todo con underscores).
+        // Antes solo reemplazaba '.', dejando '-' intacto, lo que rompía permisos
+        // como 'registrar-servicios.crear' (slug real: registrar_servicios_crear).
+        const permSlug = perm.replace(/[.\-]/g, '_');
 
-        // Verificar permiso exacto (buscar tanto con punto como con guión bajo)
+        // Verificar permiso exacto (buscar tanto con punto/guión como con guión bajo)
         return userPermissions.has(permSlug) || userPermissions.has(perm);
       });
 
@@ -214,9 +219,10 @@ async function hasPermission(userId, permissions) {
 
     return perms.some(perm => {
       if (!perm.includes('.') && !perm.includes('_')) {
-        return Array.from(userPerms).some(up => up.startsWith(`${perm}_`));
+        const modSlug = perm.replace(/-/g, '_');
+        return Array.from(userPerms).some(up => up.startsWith(`${modSlug}_`));
       }
-      const permSlug = perm.replace('.', '_');
+      const permSlug = perm.replace(/[.\-]/g, '_');
       return userPerms.has(permSlug) || userPerms.has(perm);
     });
   } catch (error) {

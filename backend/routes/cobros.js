@@ -784,7 +784,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     // (el papel es 80mm pero la cabeza imprime solo 72mm = 576 dots @ 203dpi).
     // Antes era 226.77pt y cortaba el contenido por la derecha.
     const W = 204;
-    const M = 8; // margen lateral (reducido para más contenido)
+    const M = 14; // margen lateral ~5mm — "respiro" izq/der
     const CW = W - M * 2; // content width
 
     const doc = new PDFDocument({
@@ -1007,6 +1007,9 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     doc.fontSize(7).font('Helvetica-Bold')
        .text(footerText, { align: 'center', width: CW });
+
+    // Respiro inferior ~10mm antes del corte de papel
+    doc.moveDown(2.5);
 
     doc.end();
 
