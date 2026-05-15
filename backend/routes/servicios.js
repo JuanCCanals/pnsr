@@ -96,7 +96,7 @@ router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), asy
           JOIN tipos_servicio ts ON ts.id = s.tipo_servicio_id
           JOIN clientes c ON c.id = s.cliente_id
           ${whereSQL}
-          ORDER BY s.fecha_servicio DESC, s.id DESC
+          ORDER BY s.id DESC
           LIMIT ? OFFSET ?`,
       [...args, limit, offset]
     );
