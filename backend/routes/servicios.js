@@ -4,12 +4,25 @@ const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
+const { isAdmin } = require('../middlewares/authorizePermission');
 
 // Módulo: servicios (modulo_id = 10 en BD)
 
 // helpers
 const norm = v => (v ?? '').toString().trim();
 const toInt = v => Number.parseInt(v, 10);
+
+// Validar ownership de un servicio (o ser admin).
+// Retorna { ok: true } si tiene acceso, o { ok: false, status, error } si no.
+async function ensureServicioOwnership(servicioId, userId) {
+  if (await isAdmin(userId)) return { ok: true, admin: true };
+  const [rows] = await pool.query('SELECT usuario_id FROM servicios WHERE id = ?', [servicioId]);
+  if (!rows.length) return { ok: false, status: 404, error: 'No encontrado' };
+  if (rows[0].usuario_id !== userId) {
+    return { ok: false, status: 403, error: 'No tienes permiso para acceder a este servicio' };
+  }
+  return { ok: true, admin: false };
+}
 
 // ========= CONFIG =========
 // GET /api/servicios/config/tipos  -> lee de tipos_servicio
@@ -67,6 +80,13 @@ router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), asy
     if (estado)   { where.push(`s.estado = ?`);           args.push(estado); }
     if (desde)    { where.push(`s.fecha_servicio >= ?`);  args.push(desde); }
     if (hasta)    { where.push(`s.fecha_servicio <= ?`);  args.push(hasta); }
+
+    // Filtro de ownership: usuarios no-admin solo ven sus propios servicios.
+    // Admins (roles.es_admin = 1) ven todo.
+    if (!(await isAdmin(req.user.id))) {
+      where.push(`s.usuario_id = ?`);
+      args.push(req.user.id);
+    }
 
     const whereSQL = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -176,11 +196,11 @@ router.post('/', authenticateToken, authorizePermission('servicios', 'crear'), a
     const [r] = await pool.execute(
       `INSERT INTO servicios
         (tipo_servicio_id, cliente_id, fecha_servicio, hora_servicio,
-        precio, estado, observaciones)
-        VALUES (?,?,?,?,?,?,?)`,
+        precio, estado, observaciones, usuario_id)
+        VALUES (?,?,?,?,?,?,?,?)`,
       [
         tipo_servicio_id, cliente_id, fecha_servicio, hora_servicio,
-        precio, estado, observaciones
+        precio, estado, observaciones, req.user?.id || null
       ]
     );
 
@@ -197,8 +217,8 @@ router.put('/:id', authenticateToken, authorizePermission('servicios', 'actualiz
   try {
     const { id } = req.params;
 
-    const [exist] = await pool.query(`SELECT * FROM servicios WHERE id=?`, [id]);
-    if (!exist.length) return res.status(404).json({ success:false, error:'No encontrado' });
+    const own = await ensureServicioOwnership(id, req.user.id);
+    if (!own.ok) return res.status(own.status).json({ success:false, error: own.error });
 
     const fields = [
       'tipo_servicio_id','cliente_id','fecha_servicio','hora_servicio',
@@ -224,8 +244,9 @@ router.put('/:id', authenticateToken, authorizePermission('servicios', 'actualiz
 router.delete('/:id', authenticateToken, authorizePermission('servicios', 'eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
-    const [exist] = await pool.query(`SELECT * FROM servicios WHERE id=?`, [id]);
-    if (!exist.length) return res.status(404).json({ success:false, error:'No encontrado' });
+
+    const own = await ensureServicioOwnership(id, req.user.id);
+    if (!own.ok) return res.status(own.status).json({ success:false, error: own.error });
 
     await pool.execute(`DELETE FROM servicios WHERE id=?`, [id]);
     res.json({ success:true, message:'Eliminado' });

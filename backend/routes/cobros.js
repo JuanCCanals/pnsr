@@ -371,8 +371,8 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
         const precioUnitSvc = parseFloat(item.precio || 0);
         const subtotalSvc = cantSvc * precioUnitSvc;
         const [svcResult] = await connection.execute(
-          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado, usuario_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             cliente_id,
             item.tipo_servicio_id,
@@ -380,7 +380,8 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
             item.hora_servicio || null,
             subtotalSvc,
             item.observaciones || null,
-            estadoFinal
+            estadoFinal,
+            req.user?.id || null
           ]
         );
         const newServicioId = svcResult.insertId;
@@ -575,8 +576,8 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
         const precioUnitSvc = parseFloat(item.precio || 0);
         const subtotalSvc = cantSvc * precioUnitSvc;
         const [svcResult] = await connection.execute(
-          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO servicios (cliente_id, tipo_servicio_id, fecha_servicio, hora_servicio, precio, observaciones, estado, usuario_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             cliente_id,
             item.tipo_servicio_id,
@@ -584,7 +585,8 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
             item.hora_servicio || null,
             subtotalSvc,
             item.observaciones || null,
-            estadoFinal
+            estadoFinal,
+            req.user?.id || null
           ]
         );
         const newServicioId = svcResult.insertId;
