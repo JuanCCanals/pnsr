@@ -142,6 +142,7 @@ const Comprobantes = () => {
         { header: 'Tipo', key: 'tipo', width: 18 },
         { header: 'Concepto', key: 'concepto', width: 40 },
         { header: 'Benefactor / Solicitante', key: 'beneficiario', width: 30 },
+        { header: 'Método de Pago', key: 'metodo_pago', width: 22 },
         { header: 'Monto', key: 'monto', width: 14 },
       ];
 
@@ -152,6 +153,7 @@ const Comprobantes = () => {
           tipo: c.tipo === 'caja' ? 'Caja del Amor' : 'Servicio',
           concepto: c.concepto || '',
           beneficiario: c.beneficiario || '',
+          metodo_pago: c.metodo_pago || '',
           monto: Number(c.monto || 0),
         });
       });
@@ -313,6 +315,9 @@ const Comprobantes = () => {
                 <th className="px-4 py-3 text-left font-semibold text-gray-900 dark:text-white">
                   Benefactor / Solicitante
                 </th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-900 dark:text-white">
+                  Método de Pago
+                </th>
                 <th className="px-4 py-3 text-right font-semibold text-gray-900 dark:text-white">
                   Monto
                 </th>
@@ -325,7 +330,7 @@ const Comprobantes = () => {
               {filtrados.length === 0 ? (
                 <tr>
                   <td
-                    colSpan="6"
+                    colSpan="7"
                     className="px-4 py-6 text-center text-gray-500 dark:text-gray-400"
                   >
                     No hay comprobantes para los filtros seleccionados.
@@ -356,6 +361,9 @@ const Comprobantes = () => {
                     </td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-200">
                       {c.beneficiario || '-'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 dark:text-gray-200">
+                      {c.metodo_pago || '-'}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 dark:text-white">
                       {formatMoneda(c.monto)}

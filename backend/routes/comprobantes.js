@@ -26,6 +26,7 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
         -- Comprobantes de SERVICIOS
         -- Concepto: usa c.concepto (soporta multi-item); fallback al tipo_servicio.
         -- Cliente viene de tabla clientes (NO benefactores).
+        -- metodo_pago: concatena métodos si hay pagos múltiples (ej: "Efectivo, Yape")
         SELECT
           'servicio' AS tipo,
           c.id       AS cobro_id,
@@ -33,7 +34,13 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
           c.created_at AS fecha,
           COALESCE(c.concepto, ts.nombre) AS concepto,
           cl.nombre  AS beneficiario,
-          c.numero_comprobante AS numero_comprobante
+          c.numero_comprobante AS numero_comprobante,
+          (
+            SELECT GROUP_CONCAT(DISTINCT mp.nombre ORDER BY mp.nombre SEPARATOR ', ')
+            FROM cobros_pagos cp
+            JOIN metodos_pago mp ON cp.metodo_pago_id = mp.id
+            WHERE cp.cobro_id = c.id
+          ) AS metodo_pago
         FROM cobros c
         LEFT JOIN servicios s
           ON c.servicio_id = s.id
@@ -54,7 +61,12 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
           v.created_at AS fecha,
           'Venta de cajas' AS concepto,
           b.nombre   AS beneficiario,
-          NULL       AS numero_comprobante
+          NULL       AS numero_comprobante,
+          (
+            SELECT GROUP_CONCAT(DISTINCT vp.forma_pago ORDER BY vp.forma_pago SEPARATOR ', ')
+            FROM ventas_pagos vp
+            WHERE vp.venta_id = v.id
+          ) AS metodo_pago
         FROM ventas v
         JOIN benefactores b
           ON v.benefactor_id = b.id

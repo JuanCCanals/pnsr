@@ -917,8 +917,8 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
           const fechaItem = fmtDateOnly(ti.fecha_servicio);
           const horaItem = fmtHora12(ti.hora_servicio);
           const detalle = horaItem
-            ? `  ↳ ${fechaItem}  ${horaItem}`
-            : `  ↳ ${fechaItem}`;
+            ? `   ${fechaItem}  ${horaItem}`
+            : `   ${fechaItem}`;
           doc.font('Helvetica-Oblique').fontSize(6).fillColor('#555');
           doc.text(detalle, M, doc.y, { width: CW });
           doc.fillColor('#000');
