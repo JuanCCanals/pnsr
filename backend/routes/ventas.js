@@ -961,6 +961,10 @@ router.get('/:id/ticket', authenticateToken, async (req, res) => {
        .text('RUC: 20387535684', { align: 'center' });
     doc.fontSize(6)
        .text('Jr. Los Pinos 291, Urb. Camacho, La Molina', { align: 'center' });
+    doc.fontSize(6)
+       .text('Cel: 952-789-080 / 994-349-722', { align: 'center' });
+    doc.fontSize(6)
+       .text('Email: informes@parroquiansr.org', { align: 'center' });
 
     // Línea doble
     doc.moveDown(0.4);

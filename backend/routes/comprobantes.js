@@ -8,16 +8,26 @@ const router = express.Router();
 const pool = require('../config/db');
 const authenticateToken = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
+const { isAdmin } = require('../middlewares/authorizePermission');
 
 // GET /api/comprobantes
 // Lista combinada de comprobantes de:
 // - Servicios (tabla cobros + servicios + tipos_servicio)
 // - Cajas (tabla ventas + benefactores)
+//
+// Reglas de visibilidad:
+// - Admin (es_admin=1): ve TODOS los comprobantes (servicios + cajas)
+// - No-admin: solo ve los SERVICIOS que registró él mismo (cobros.usuario_id = user.id).
+//   Las CAJAS quedan ocultas porque ventas no tiene tracking de usuario y un
+//   Operador de Servicios no debería verlas (son de otro modulo).
 router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), async (req, res) => {
   try {
     // Por defecto últimos 90 días (se puede ajustar con ?dias=)
     const dias = parseInt(req.query.dias || '90', 10);
     const diasValidos = Number.isNaN(dias) ? 90 : Math.min(Math.max(dias, 1), 365);
+
+    const userId = req.user.id;
+    const admin = await isAdmin(userId);
 
     const [rows] = await pool.execute(
       `
@@ -50,10 +60,12 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
           ON c.cliente_id = cl.id
         WHERE c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
           AND c.caja_id IS NULL
+          AND (? = 1 OR c.usuario_id = ?)
 
         UNION ALL
 
         -- Comprobantes de CAJAS
+        -- Solo visibles para admin (ventas no tiene usuario_id por ahora).
         SELECT
           'caja'     AS tipo,
           v.id       AS cobro_id,
@@ -71,10 +83,11 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
         JOIN benefactores b
           ON v.benefactor_id = b.id
         WHERE v.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          AND ? = 1
       ) AS comprobantes
       ORDER BY fecha DESC
       `,
-      [diasValidos, diasValidos]
+      [diasValidos, admin ? 1 : 0, userId, diasValidos, admin ? 1 : 0]
     );
 
     res.json({
