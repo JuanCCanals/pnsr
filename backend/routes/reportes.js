@@ -299,6 +299,7 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
         ts.nombre AS tipo_servicio, s.fecha_servicio, s.hora_servicio,
         s.descripcion AS descripcion_servicio, cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono,
         co.servicio_nombre_temp,
+        u.nombre AS usuario_nombre, u.email AS usuario_email,
         GROUP_CONCAT(DISTINCT mp.nombre ORDER BY mp.nombre SEPARATOR ', ') AS metodo_pago,
         GROUP_CONCAT(DISTINCT CONCAT(mp.nombre, ': S/ ', FORMAT(cp.monto, 2)) ORDER BY mp.nombre SEPARATOR ' | ') AS detalle_pagos,
         MAX(cp.fecha_operacion) AS fecha_operacion,
@@ -311,9 +312,11 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
       LEFT JOIN servicios s ON s.id=co.servicio_id
       LEFT JOIN tipos_servicio ts ON ts.id=s.tipo_servicio_id
       LEFT JOIN clientes cl ON cl.id=co.cliente_id
+      LEFT JOIN usuarios u ON u.id=co.usuario_id
       ${wSQL}
       GROUP BY co.id, co.concepto, co.monto, co.fecha_cobro, co.numero_comprobante, co.observaciones,
-        ts.nombre, s.fecha_servicio, s.hora_servicio, s.descripcion, cl.nombre, cl.telefono, co.servicio_nombre_temp
+        ts.nombre, s.fecha_servicio, s.hora_servicio, s.descripcion, cl.nombre, cl.telefono, co.servicio_nombre_temp,
+        u.nombre, u.email
       ORDER BY co.fecha_cobro DESC, co.id DESC`, a);
     const total=rows.reduce((s,r)=>s+Number(r.monto||0),0);
     const [metodos]=await pool.query(`SELECT id,nombre FROM metodos_pago ORDER BY nombre`);

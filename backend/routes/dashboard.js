@@ -158,16 +158,18 @@ router.get(
   async (req, res) => {
     try {
       // 1) Total de servicios y tipos principales
+      // NOTA: El total_recaudado se calcula a partir de cobros (caja_id IS NULL = cobros de servicios),
+      // no via JOIN con servicios. El flujo multi-item deja cobros.servicio_id en NULL y el JOIN
+      // anterior daba 0. Esta subquery suma todo lo cobrado por servicios sin riesgo de doble-conteo.
       const [kpisResult] = await pool.execute(`
-        SELECT 
+        SELECT
           COUNT(s.id) as total_servicios,
           SUM(CASE WHEN ts.nombre LIKE '%Bauti%' THEN 1 ELSE 0 END) as bautismos,
           SUM(CASE WHEN ts.nombre LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as matrimonios,
           SUM(CASE WHEN ts.nombre NOT LIKE '%Bauti%' AND ts.nombre NOT LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as otros_servicios,
-          COALESCE(SUM(c.monto), 0) as total_recaudado
+          COALESCE((SELECT SUM(monto) FROM cobros WHERE caja_id IS NULL), 0) as total_recaudado
         FROM servicios s
         LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
-        LEFT JOIN cobros c ON s.id = c.servicio_id
       `);
 
       const kpis = kpisResult[0] || {};
