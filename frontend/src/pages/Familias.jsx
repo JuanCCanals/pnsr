@@ -853,9 +853,15 @@ const Familias = () => {
     table.tabla tbody { font-size: 13px; } /* si antes era 12px */
   
     /* anchos */
-    table.tabla th.rel, table.tabla td.rel { width: 60%; text-align: left; }
-    table.tabla th.sex, table.tabla td.sex { width: 20%; text-align: left; }
-    table.tabla th.eda, table.tabla td.eda { width: 20%; text-align: left; }
+    table.tabla th.rel, table.tabla td.rel { width: 55%; text-align: left; }
+    table.tabla th.sex, table.tabla td.sex { width: 18%; text-align: left; }
+    table.tabla th.eda, table.tabla td.eda {
+      width: 27%; text-align: left;
+      /* Permitir que "3 MESES" / "1 AÑO" pasen a 2 lineas en vez de
+         truncarse con "..." por el nowrap global de td. */
+      white-space: normal; overflow: visible; text-overflow: clip;
+      line-height: 1.1;
+    }
   
     .tabla-placeholder { width: 100%; height: 100%; }
   `;

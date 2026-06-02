@@ -27,6 +27,30 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/clientes/by-dni/:dni
+// Busqueda directa por DNI/RUC para auto-llenar el formulario cuando el
+// feligres ya fue registrado antes (evita salir a APIs externas si ya
+// tenemos sus datos).
+router.get('/by-dni/:dni', authenticateToken, async (req, res) => {
+  try {
+    const dni = String(req.params.dni || '').trim();
+    if (!/^\d{8}$|^\d{11}$/.test(dni)) {
+      return res.status(400).json({ success: false, error: 'DNI debe tener 8 o 11 digitos' });
+    }
+    const [rows] = await pool.query(
+      'SELECT id, dni, nombre, telefono, email, direccion FROM clientes WHERE dni = ? LIMIT 1',
+      [dni]
+    );
+    if (!rows.length) {
+      return res.json({ success: true, found: false });
+    }
+    res.json({ success: true, found: true, data: rows[0] });
+  } catch (e) {
+    console.error('CLIENTES by-dni:', e);
+    res.status(500).json({ success: false, error: 'Error interno' });
+  }
+});
+
 // POST /api/clientes
 router.post('/', authenticateToken, async (req, res) => {
   try {

@@ -449,7 +449,11 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
   };
 
 
-  // ========== BÃšSQUEDA DNI ==========
+  // ========== BÚSQUEDA DNI ==========
+  // Flujo: primero buscar en nuestra BD (clientes ya registrados antes).
+  // Si no existe, recién consultamos la API externa (APISPeru / ApisNetPe).
+  // Eso evita repetir consultas externas (con sus límites) cuando el feligrés
+  // ya pasó alguna vez por la parroquia.
   const handleBuscarDNI = async () => {
     const doc = formData.cliente_dni?.trim();
 
@@ -460,6 +464,29 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
     setBuscandoDNI(true);
     try {
+      // 1) BD local
+      const token = localStorage.getItem('token');
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+      const localRes = await fetch(`${apiBase}/clientes/by-dni/${doc}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (localRes.ok) {
+        const local = await localRes.json();
+        if (local.success && local.found && local.data) {
+          const c = local.data;
+          setFormData(prev => ({
+            ...prev,
+            cliente_nombre: c.nombre || prev.cliente_nombre,
+            cliente_telefono: c.telefono || prev.cliente_telefono || '',
+            cliente_email: c.email || prev.cliente_email || '',
+          }));
+          const tipoLocal = doc.length === 11 ? 'RUC' : 'DNI';
+          alert(`✓ ${tipoLocal} encontrado en registros previos:\n${c.nombre}`);
+          return;
+        }
+      }
+
+      // 2) API externa
       const resultado = await consultarDocumento(doc, dniApi);
       setFormData(prev => ({
         ...prev,
