@@ -20,7 +20,7 @@ const { isAdmin } = require('../middlewares/authorizePermission');
 // - No-admin: solo ve los SERVICIOS que registró él mismo (cobros.usuario_id = user.id).
 //   Las CAJAS quedan ocultas porque ventas no tiene tracking de usuario y un
 //   Operador de Servicios no debería verlas (son de otro modulo).
-router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('comprobantes.leer'), async (req, res) => {
   try {
     // Por defecto últimos 90 días (se puede ajustar con ?dias=)
     const dias = parseInt(req.query.dias || '90', 10);

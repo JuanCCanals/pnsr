@@ -125,7 +125,16 @@ async function isAdmin(userId) {
  *   Formato: 'modulo.accion', 'modulo' (cualquier acción), o ['perm1', 'perm2']
  * @returns {function} Middleware function
  */
-function authorizePermission(requiredPermissions) {
+function authorizePermission(requiredPermissions, legacyAccion) {
+  // Compatibilidad retroactiva: muchas rutas viejas llaman authorizePermission(
+  // 'modulo', 'accion'). El segundo argumento se ignoraba silenciosamente y el
+  // middleware caia a la rama 'modulo' (cualquier permiso del modulo), lo que
+  // permitia escalar privilegios: alguien con 'campanias_leer' podia crear o
+  // borrar campanias. Si nos llaman con dos args, los unimos a 'modulo.accion'
+  // para que la verificacion sea estricta.
+  if (typeof legacyAccion === 'string' && typeof requiredPermissions === 'string') {
+    requiredPermissions = `${requiredPermissions}.${legacyAccion}`;
+  }
   return async (req, res, next) => {
     try {
       // Verificar que el usuario esté autenticado

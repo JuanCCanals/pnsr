@@ -8,7 +8,7 @@ const authorizePermission = require('../middlewares/authorizePermission');
 const nullIfEmpty = (v) => (v === undefined || v === null || String(v).trim() === '') ? null : v;
 
 // Obtener campañas
-router.get('/', auth, authorizePermission('campanias', 'leer'), async (req, res) => {
+router.get('/', auth, authorizePermission('campanias.leer'), async (req, res) => {
   try {
     const [rows] = await db.query('SELECT * FROM campanias ORDER BY anio DESC');
     res.json(rows);
@@ -22,7 +22,7 @@ router.get('/', auth, authorizePermission('campanias', 'leer'), async (req, res)
 // Regla: solo UNA campaña ACTIVA por año. Se permiten múltiples campañas del mismo año
 // siempre que solo haya una ACTIVA. Al crear una ACTIVA, las otras del mismo año
 // se desactivan automáticamente.
-router.post('/', auth, authorizePermission('campanias', 'crear'), async (req, res) => {
+router.post('/', auth, authorizePermission('campanias.crear'), async (req, res) => {
   try {
     const { anio, nombre, descripcion, fecha_inicio, fecha_fin, estado = 'ACTIVA' } = req.body;
     if (!anio || !nombre || !String(nombre).trim()) {
@@ -47,7 +47,7 @@ router.post('/', auth, authorizePermission('campanias', 'crear'), async (req, re
 });
 
 // Actualizar campaña
-router.put('/:id', auth, authorizePermission('campanias', 'actualizar'), async (req, res) => {
+router.put('/:id', auth, authorizePermission('campanias.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre, descripcion, estado, fecha_inicio, fecha_fin } = req.body;
@@ -72,7 +72,7 @@ router.put('/:id', auth, authorizePermission('campanias', 'actualizar'), async (
 });
 
 // Toggle estado — al activar una, desactiva otras del mismo año
-router.patch('/:id/toggle', auth, authorizePermission('campanias', 'actualizar'), async (req, res) => {
+router.patch('/:id/toggle', auth, authorizePermission('campanias.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -97,7 +97,7 @@ router.patch('/:id/toggle', auth, authorizePermission('campanias', 'actualizar')
 });
 
 // Eliminar campaña
-router.delete('/:id', auth, authorizePermission('campanias', 'eliminar'), async (req, res) => {
+router.delete('/:id', auth, authorizePermission('campanias.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
     const [result] = await db.query('DELETE FROM campanias WHERE id = ?', [id]);

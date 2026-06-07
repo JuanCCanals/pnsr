@@ -5,7 +5,7 @@ const auth = require('../middlewares/auth');
 const authorizePermission = require('../middlewares/authorizePermission');
 
 // GET /api/modalidades?campania_id=1
-router.get('/', auth, authorizePermission('modalidades', 'leer'), async (req, res) => {
+router.get('/', auth, authorizePermission('modalidades.leer'), async (req, res) => {
   const { campania_id } = req.query;
   let sql = 'SELECT m.*, c.nombre AS campania FROM campania_modalidades m LEFT JOIN campanias c ON c.id = m.campania_id';
   const params = [];
@@ -18,7 +18,7 @@ router.get('/', auth, authorizePermission('modalidades', 'leer'), async (req, re
 });
 
 // POST { campania_id, nombre, costo, moneda }
-router.post('/', auth, authorizePermission('modalidades', 'crear'), async (req, res) => {
+router.post('/', auth, authorizePermission('modalidades.crear'), async (req, res) => {
   const { campania_id, nombre, costo, moneda } = req.body;
   await db.query(
     'INSERT INTO campania_modalidades (campania_id, nombre, costo, moneda) VALUES (?,?,?,?)',
@@ -28,7 +28,7 @@ router.post('/', auth, authorizePermission('modalidades', 'crear'), async (req, 
 });
 
 // PUT /api/modalidades/:id
-router.put('/:id', auth, authorizePermission('modalidades', 'actualizar'), async (req, res) => {
+router.put('/:id', auth, authorizePermission('modalidades.actualizar'), async (req, res) => {
   const { id } = req.params;
   const { nombre, costo, estado, moneda } = req.body;
   await db.query(

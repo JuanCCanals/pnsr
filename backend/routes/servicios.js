@@ -26,7 +26,7 @@ async function ensureServicioOwnership(servicioId, userId) {
 
 // ========= CONFIG =========
 // GET /api/servicios/config/tipos  -> lee de tipos_servicio
-router.get('/config/tipos', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
+router.get('/config/tipos', authenticateToken, authorizePermission('servicios.leer'), async (_req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT id AS value, nombre AS label, precio_base
@@ -42,7 +42,7 @@ router.get('/config/tipos', authenticateToken, authorizePermission('servicios', 
 });
 
 // GET /api/servicios/config/formas-pago
-router.get('/config/formas-pago', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
+router.get('/config/formas-pago', authenticateToken, authorizePermission('servicios.leer'), async (_req, res) => {
   // Igual que Gestión
   const data = [
     { value:'efectivo',      label:'Efectivo' },
@@ -56,7 +56,7 @@ router.get('/config/formas-pago', authenticateToken, authorizePermission('servic
 
 // ========= LISTADO & STATS =========
 // GET /api/servicios?search=&tipo_servicio_id=&cliente_id=&estado=&desde=&hasta=&page=1&limit=20
-router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), async (req, res) => {
+router.get('/', authenticateToken, authorizePermission('servicios.leer'), async (req, res) => {
   try {
     const search = norm(req.query.search);
     const tipoId = norm(req.query.tipo_servicio_id);
@@ -133,7 +133,7 @@ router.get('/', authenticateToken, authorizePermission('servicios', 'leer'), asy
 });
 
 // GET /api/servicios/stats  -> totales por estado y monto realizado
-router.get('/stats', authenticateToken, authorizePermission('servicios', 'leer'), async (_req, res) => {
+router.get('/stats', authenticateToken, authorizePermission('servicios.leer'), async (_req, res) => {
   try {
     const [[{ total }]] = await pool.query(`SELECT COUNT(*) AS total FROM servicios`);
     const [[{ programados }]] = await pool.query(`SELECT COUNT(*) AS programados FROM servicios WHERE estado='programado'`);
@@ -149,7 +149,7 @@ router.get('/stats', authenticateToken, authorizePermission('servicios', 'leer')
 
 // ========= CRUD =========
 // POST /api/servicios
-router.post('/', authenticateToken, authorizePermission('servicios', 'crear'), async (req, res) => {
+router.post('/', authenticateToken, authorizePermission('servicios.crear'), async (req, res) => {
   try {
     let {
       tipo_servicio_id,        // required (number)
@@ -213,7 +213,7 @@ router.post('/', authenticateToken, authorizePermission('servicios', 'crear'), a
 
 
 // PUT /api/servicios/:id
-router.put('/:id', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
+router.put('/:id', authenticateToken, authorizePermission('servicios.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -241,7 +241,7 @@ router.put('/:id', authenticateToken, authorizePermission('servicios', 'actualiz
 });
 
 // DELETE /api/servicios/:id
-router.delete('/:id', authenticateToken, authorizePermission('servicios', 'eliminar'), async (req, res) => {
+router.delete('/:id', authenticateToken, authorizePermission('servicios.eliminar'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -258,7 +258,7 @@ router.delete('/:id', authenticateToken, authorizePermission('servicios', 'elimi
 
 // ========= ACCIONES DE ESTADO =========
 // POST /api/servicios/:id/marcar-realizado
-router.post('/:id/marcar-realizado', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
+router.post('/:id/marcar-realizado', authenticateToken, authorizePermission('servicios.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     await pool.execute(`UPDATE servicios SET estado='realizado' WHERE id=?`, [id]);
@@ -270,7 +270,7 @@ router.post('/:id/marcar-realizado', authenticateToken, authorizePermission('ser
 });
 
 // POST /api/servicios/:id/cancelar  { observaciones? }
-router.post('/:id/cancelar', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
+router.post('/:id/cancelar', authenticateToken, authorizePermission('servicios.actualizar'), async (req, res) => {
   try {
     const { id } = req.params;
     const { observaciones=null } = req.body || {};
@@ -297,7 +297,7 @@ router.post('/:id/cancelar', authenticateToken, authorizePermission('servicios',
 //   4. Si el servicio no tiene cobro asociado (solo se programo, nunca se cobro)
 //      marca solo el servicio como cancelado.
 // El motivo es obligatorio para mantener auditoria.
-router.post('/:id/anular', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
+router.post('/:id/anular', authenticateToken, authorizePermission('servicios.actualizar'), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { id } = req.params;
