@@ -167,7 +167,7 @@ router.get(
           SUM(CASE WHEN ts.nombre LIKE '%Bauti%' THEN 1 ELSE 0 END) as bautismos,
           SUM(CASE WHEN ts.nombre LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as matrimonios,
           SUM(CASE WHEN ts.nombre NOT LIKE '%Bauti%' AND ts.nombre NOT LIKE '%Matrimonio%' THEN 1 ELSE 0 END) as otros_servicios,
-          COALESCE((SELECT SUM(monto) FROM cobros WHERE caja_id IS NULL), 0) as total_recaudado
+          COALESCE((SELECT SUM(monto) FROM cobros WHERE caja_id IS NULL AND anulado = 0), 0) as total_recaudado
         FROM servicios s
         LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
       `);

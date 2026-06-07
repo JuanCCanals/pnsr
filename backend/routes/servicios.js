@@ -285,4 +285,112 @@ router.post('/:id/cancelar', authenticateToken, authorizePermission('servicios',
   }
 });
 
+// POST /api/servicios/:id/anular  { motivo }
+// Anulacion completa (Modelo A): un solo boton "Anulacion" reemplaza al
+// Eliminar y Cancelar viejos. Hace lo siguiente, en transaccion:
+//   1. Encuentra los cobros asociados al servicio (via cobro_servicios.cobro_id
+//      o via cobros.servicio_id en el flujo legacy single-item).
+//   2. Para cada cobro asociado: marca anulado=1 + motivo + anulado_por + anulado_at.
+//   3. Si el cobro es multi-item, TODOS sus servicios quedan cancelados (porque
+//      el comprobante fisico cubre todos los items juntos: no tiene sentido
+//      anular un solo item).
+//   4. Si el servicio no tiene cobro asociado (solo se programo, nunca se cobro)
+//      marca solo el servicio como cancelado.
+// El motivo es obligatorio para mantener auditoria.
+router.post('/:id/anular', authenticateToken, authorizePermission('servicios', 'actualizar'), async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const motivo = String((req.body && req.body.motivo) || '').trim();
+    if (!motivo) {
+      conn.release();
+      return res.status(400).json({ success: false, error: 'El motivo de anulacion es obligatorio' });
+    }
+
+    // Validar ownership del servicio (admin bypass)
+    const own = await ensureServicioOwnership(id, req.user.id);
+    if (!own.ok) {
+      conn.release();
+      return res.status(own.status).json({ success: false, error: own.error });
+    }
+
+    await conn.beginTransaction();
+
+    // 1) Encontrar cobros asociados: prioritariamente via cobro_servicios
+    //    (flujo multi-item actual); fallback via cobros.servicio_id (legacy).
+    const [cobroLinks] = await conn.query(
+      `SELECT DISTINCT cs.cobro_id
+       FROM cobro_servicios cs
+       WHERE cs.servicio_id = ?
+       UNION
+       SELECT id AS cobro_id FROM cobros WHERE servicio_id = ?`,
+      [id, id]
+    );
+    const cobroIds = cobroLinks.map(r => r.cobro_id).filter(Boolean);
+
+    const userId = req.user.id;
+    let serviciosAfectados = [parseInt(id, 10)];
+
+    if (cobroIds.length) {
+      // 2) Anular los cobros (preserva historial completo)
+      const ph = cobroIds.map(() => '?').join(',');
+      await conn.execute(
+        `UPDATE cobros
+           SET anulado = 1, motivo_anulacion = ?, anulado_por = ?, anulado_at = NOW()
+         WHERE id IN (${ph})`,
+        [motivo, userId, ...cobroIds]
+      );
+
+      // 3) Cancelar TODOS los servicios de esos cobros (multi-item incluido)
+      const [linkedServ] = await conn.query(
+        `SELECT DISTINCT servicio_id FROM cobro_servicios WHERE cobro_id IN (${ph}) AND servicio_id IS NOT NULL
+         UNION
+         SELECT servicio_id FROM cobros WHERE id IN (${ph}) AND servicio_id IS NOT NULL`,
+        [...cobroIds, ...cobroIds]
+      );
+      const allServiceIds = Array.from(new Set([
+        ...linkedServ.map(r => r.servicio_id),
+        parseInt(id, 10),
+      ])).filter(Boolean);
+
+      if (allServiceIds.length) {
+        const phS = allServiceIds.map(() => '?').join(',');
+        await conn.execute(
+          `UPDATE servicios
+             SET estado='cancelado',
+                 observaciones = CONCAT(IFNULL(observaciones, ''), CASE WHEN observaciones IS NULL OR observaciones='' THEN '' ELSE ' | ' END, 'ANULADO: ', ?)
+           WHERE id IN (${phS})`,
+          [motivo, ...allServiceIds]
+        );
+        serviciosAfectados = allServiceIds;
+      }
+    } else {
+      // 4) Servicio sin cobro: solo marcar como cancelado
+      await conn.execute(
+        `UPDATE servicios
+           SET estado='cancelado',
+               observaciones = CONCAT(IFNULL(observaciones, ''), CASE WHEN observaciones IS NULL OR observaciones='' THEN '' ELSE ' | ' END, 'ANULADO: ', ?)
+         WHERE id = ?`,
+        [motivo, id]
+      );
+    }
+
+    await conn.commit();
+    res.json({
+      success: true,
+      message: 'Servicio anulado',
+      data: {
+        servicios_anulados: serviciosAfectados,
+        cobros_anulados: cobroIds,
+      },
+    });
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    console.error('SERVICIOS anular:', e);
+    res.status(500).json({ success: false, error: 'Error interno' });
+  } finally {
+    conn.release();
+  }
+});
+
 module.exports = router;

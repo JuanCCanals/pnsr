@@ -60,6 +60,7 @@ router.get('/', authenticateToken, authorizePermission('comprobantes', 'leer'), 
           ON c.cliente_id = cl.id
         WHERE c.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
           AND c.caja_id IS NULL
+          AND c.anulado = 0
           AND (? = 1 OR c.usuario_id = ?)
 
         UNION ALL

@@ -290,6 +290,8 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
     const desde=(req.query.desde||'').trim(), hasta=(req.query.hasta||'').trim();
     const metodo=(req.query.metodo_pago_id||'').trim();
     const w=[],a=[];
+    // Excluir cobros anulados de los reportes contables
+    w.push(`co.anulado = 0`);
     if(desde){w.push(`co.fecha_cobro>=?`);a.push(desde);}
     if(hasta){w.push(`co.fecha_cobro<=?`);a.push(hasta);}
     if(metodo){w.push(`cp.metodo_pago_id=?`);a.push(metodo);}

@@ -994,19 +994,40 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar este servicio?')) return;
+  // Anulacion unificada (Modelo A): reemplaza al viejo Eliminar y Cancelar.
+  // Marca el servicio como cancelado y, si tenia cobro asociado, anula el cobro
+  // y todos los demas servicios del mismo cobro (porque el comprobante fisico
+  // cubre todos los items juntos). El historico nunca se borra.
+  const handleAnular = async (id) => {
+    const motivo = prompt('Motivo de anulación (obligatorio):');
+    if (motivo === null) return; // cancelo el prompt
+    const motivoTrim = String(motivo).trim();
+    if (!motivoTrim) {
+      alert('Debes indicar un motivo para la anulación.');
+      return;
+    }
+    if (!confirm('¿Confirmas la anulación de este servicio? El historial se conserva pero el monto deja de contar en KPIs e informes.')) return;
     try {
-      const resp = await eliminarServicio(id);
+      const token = localStorage.getItem('token');
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+      const res = await fetch(`${apiBase}/servicios/${id}/anular`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ motivo: motivoTrim }),
+      });
+      const resp = await res.json();
       if (resp.success) {
-        setSuccessMessage('Servicio eliminado exitosamente');
+        setSuccessMessage('Servicio anulado');
         loadServicios();
         loadStats();
       } else {
-        setErrors({ general: resp.message || resp.error || 'No se pudo eliminar' });
+        setErrors({ general: resp.error || resp.message || 'No se pudo anular' });
       }
     } catch (error) {
-      console.error('Error al eliminar servicio:', error);
+      console.error('Error al anular servicio:', error);
       setErrors({ general: 'Error de conexión' });
     }
   };
@@ -1226,28 +1247,21 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                     </button>
 
                     {servicio.estado === 'programado' && canUpdate && (
-                      <>
-                        <button
-                          onClick={() => handleMarcarRealizado(servicio.id)}
-                          className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
-                        >
-                          Marcar realizado
-                        </button>
-                        <button
-                          onClick={() => handleCancelar(servicio.id)}
-                          className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                        >
-                          Cancelar
-                        </button>
-                      </>
+                      <button
+                        onClick={() => handleMarcarRealizado(servicio.id)}
+                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                      >
+                        Marcar realizado
+                      </button>
                     )}
 
-                    {servicio.estado !== 'realizado' && canDelete && (
+                    {servicio.estado !== 'cancelado' && (canDelete || canUpdate) && (
                       <button
-                        onClick={() => handleDelete(servicio.id)}
+                        onClick={() => handleAnular(servicio.id)}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                        title="Anular el servicio (mantiene el historial)"
                       >
-                        Eliminar
+                        Anulación
                       </button>
                     )}
                   </div>

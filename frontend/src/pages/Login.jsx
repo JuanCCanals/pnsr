@@ -137,14 +137,6 @@ const Login = () => {
               )}
             </button>
           </div>
-
-          <div className="text-center">
-            <div className="text-sm text-gray-600 dark:text-gray-400">
-              <p className="font-medium">Credenciales por defecto:</p>
-              <p>Email: admin@pnsr.org</p>
-              <p>Contraseña: password</p>
-            </div>
-          </div>
         </form>
       </div>
     </div>
