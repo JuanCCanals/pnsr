@@ -591,11 +591,11 @@ router.get('/', authenticateToken, authorizePermission('venta_cajas.leer'), asyn
   
   const [rows] = await pool.query(
     `
-    SELECT 
+    SELECT
       v.id, v.recibo, v.fecha, v.modalidad_id, v.punto_venta_id,
       v.forma_pago, v.estado, v.monto, v.moneda,
       v.fecha_operacion, v.hora_operacion, v.nro_operacion, v.observaciones,
-      v.fecha_devolucion,
+      v.fecha_devolucion, v.anulado, v.motivo_anulacion,
   
       b.id AS benefactor_id, b.nombre AS benefactor_nombre, b.telefono AS benefactor_telefono, b.email AS benefactor_email,
   
@@ -831,6 +831,131 @@ router.put('/:id', authenticateToken, authorizePermission('venta_cajas.actualiza
     await conn.rollback();
     console.error('PUT /ventas/:id', e);
     res.status(500).json({ success: false, error: 'Error actualizando venta' });
+  } finally {
+    conn.release();
+  }
+});
+
+
+// ========= POST /api/ventas/:id/anular  { motivo } =========
+// Anulacion de una asignacion/venta de caja. Reutiliza el permiso
+// 'venta_cajas.eliminar' (lo tienen Admin y Supervisor, NO Operador Social).
+//
+// Nada se borra (auditoria). En una transaccion:
+//   1. Valida que la venta exista y no este ya anulada.
+//   2. Bloquea la anulacion si alguna caja ya esta 'entregada_familia'
+//      (ya salio fisicamente a la familia beneficiaria).
+//   3. Marca la venta: anulado=1 + motivo + usuario + timestamp.
+//   4. Revierte cada caja a 'disponible' liberando benefactor y fechas,
+//      para que pueda reasignarse. (familia_id/modalidad/punto se conservan).
+//   5. Revierte el movimiento global de excedentes con un asiento
+//      compensatorio de signo opuesto (mantiene el libro mayor completo).
+// Las tablas ventas_pagos y ventas_cajas se conservan intactas; los KPIs
+// y reportes las excluyen por el flag ventas.anulado.
+router.post('/:id/anular', authenticateToken, authorizePermission('venta_cajas.eliminar'), async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const ventaId = Number(req.params.id);
+    if (!ventaId) {
+      conn.release();
+      return res.status(400).json({ success: false, error: 'ID inválido' });
+    }
+
+    const motivo = String((req.body && req.body.motivo) || '').trim();
+    if (!motivo) {
+      conn.release();
+      return res.status(400).json({ success: false, error: 'El motivo de anulación es obligatorio' });
+    }
+
+    await conn.beginTransaction();
+
+    // 1) Venta existente y no anulada
+    const [vRows] = await conn.query(
+      'SELECT id, anulado FROM ventas WHERE id = ? LIMIT 1',
+      [ventaId]
+    );
+    if (!vRows.length) {
+      await conn.rollback();
+      conn.release();
+      return res.status(404).json({ success: false, error: 'Venta no encontrada' });
+    }
+    if (Number(vRows[0].anulado) === 1) {
+      await conn.rollback();
+      conn.release();
+      return res.status(400).json({ success: false, error: 'La venta ya está anulada' });
+    }
+
+    // 2) Cajas asociadas + guard de estado 'entregada_familia'
+    const [cajasVenta] = await conn.query(
+      `SELECT c.id, c.codigo, c.estado
+       FROM ventas_cajas vc
+       JOIN cajas c ON c.id = vc.caja_id
+       WHERE vc.venta_id = ?`,
+      [ventaId]
+    );
+    const entregadasFamilia = cajasVenta
+      .filter(c => String(c.estado).toLowerCase() === 'entregada_familia')
+      .map(c => c.codigo);
+    if (entregadasFamilia.length) {
+      await conn.rollback();
+      conn.release();
+      return res.status(400).json({
+        success: false,
+        error: `No se puede anular: la(s) caja(s) ${entregadasFamilia.join(', ')} ya fue(ron) entregada(s) a la familia.`
+      });
+    }
+
+    // 3) Marcar la venta como anulada (conserva todo el historial)
+    await conn.query(
+      `UPDATE ventas
+         SET anulado = 1, motivo_anulacion = ?, anulado_por = ?, anulado_at = NOW()
+       WHERE id = ?`,
+      [motivo, req.user?.id || null, ventaId]
+    );
+
+    // 4) Revertir cada caja a disponible (liberar para reasignar)
+    if (cajasVenta.length) {
+      const ids = cajasVenta.map(c => c.id);
+      const ph = ids.map(() => '?').join(',');
+      await conn.query(
+        `UPDATE cajas
+           SET estado = 'disponible',
+               benefactor_id = NULL,
+               fecha_asignacion = NULL,
+               fecha_entrega = NULL,
+               fecha_devolucion = NULL
+         WHERE id IN (${ph})`,
+        ids
+      );
+    }
+
+    // 5) Revertir excedentes con asiento compensatorio (neto opuesto)
+    const [exRows] = await conn.query(
+      'SELECT COALESCE(SUM(excedente), 0) AS neto FROM excedentes WHERE venta_id = ?',
+      [String(ventaId)]
+    );
+    const neto = Number(exRows[0]?.neto || 0);
+    if (neto !== 0) {
+      await conn.query(
+        'INSERT INTO excedentes (venta_id, excedente) VALUES (?, ?)',
+        [String(ventaId), -neto]
+      );
+    }
+
+    await conn.commit();
+    res.json({
+      success: true,
+      message: 'Venta anulada',
+      data: {
+        venta_id: ventaId,
+        cajas_liberadas: cajasVenta.map(c => c.codigo),
+        excedente_revertido: neto,
+      },
+    });
+  } catch (e) {
+    try { await conn.rollback(); } catch {}
+    console.error('POST /ventas/:id/anular', e);
+    res.status(500).json({ success: false, error: 'Error anulando la venta' });
   } finally {
     conn.release();
   }

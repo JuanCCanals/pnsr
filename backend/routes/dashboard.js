@@ -30,15 +30,16 @@ router.get(
         FROM cajas c
       `);
 
-      // 2) Cajas vendidas (pagadas) y montos
+      // 2) Cajas vendidas (pagadas) y montos — excluye ventas anuladas
       const [cajasVendidas] = await pool.execute(`
-        SELECT 
+        SELECT
           COUNT(DISTINCT vc.caja_id) AS cantidad,
           SUM(CASE WHEN vc.monto = 40 THEN vc.monto ELSE 0 END) AS monto_40,
           SUM(CASE WHEN vc.monto = 160 THEN vc.monto ELSE 0 END) AS monto_160,
           SUM(vc.monto) AS total_recaudado
         FROM ventas_cajas vc
-        WHERE vc.estado_pago = 'PAGADO'
+        JOIN ventas v ON v.id = vc.venta_id
+        WHERE vc.estado_pago = 'PAGADO' AND v.anulado = 0
       `);
 
       // 3) Cajas no vendidas (stock disponible)
@@ -55,11 +56,12 @@ router.get(
         WHERE activo = 1
       `);
 
-      // 5) Cajas entregadas a benefactores
+      // 5) Cajas entregadas a benefactores — excluye ventas anuladas
       const [cajasEntregadas] = await pool.execute(`
         SELECT COUNT(DISTINCT vc.caja_id) AS cantidad
         FROM ventas_cajas vc
-        WHERE vc.estado_movimiento = 'ENTREGADA'
+        JOIN ventas v ON v.id = vc.venta_id
+        WHERE vc.estado_movimiento = 'ENTREGADA' AND v.anulado = 0
       `);
 
       // 6) Cajas devueltas llenas
@@ -76,7 +78,7 @@ router.get(
           COUNT(*) AS cantidad,
           SUM(v.monto) AS monto
         FROM ventas v
-        WHERE v.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        WHERE v.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND v.anulado = 0
         GROUP BY DATE(v.created_at)
         ORDER BY fecha DESC
       `);
@@ -89,6 +91,7 @@ router.get(
           SUM(v.monto) AS monto_total
         FROM ventas v
         JOIN benefactores b ON v.benefactor_id = b.id
+        WHERE v.anulado = 0
         GROUP BY b.id, b.nombre
         ORDER BY monto_total DESC
         LIMIT 5
@@ -102,6 +105,7 @@ router.get(
           SUM(v.monto) AS monto
         FROM ventas v
         JOIN puntos_venta pv ON v.punto_venta_id = pv.id
+        WHERE v.anulado = 0
         GROUP BY pv.id, pv.nombre
         ORDER BY monto DESC
       `);

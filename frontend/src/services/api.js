@@ -95,6 +95,7 @@ export const ventasService = {
   buscarCaja: (codigo)          => api.get(`/ventas/box/${encodeURIComponent(codigo)}`).then(r => r.data),
   registrar:  (payload)         => api.post('/ventas', payload).then(r => r.data),
   update:     (id, body)        => api.put(`/ventas/${id}`, body).then(r => r.data),
+  anular:     (id, motivo)      => api.post(`/ventas/${id}/anular`, { motivo }).then(r => r.data),
 };
 
 export const catalogosService = {

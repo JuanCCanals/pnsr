@@ -84,6 +84,7 @@ router.get('/', authenticateToken, authorizePermission('comprobantes.leer'), asy
         JOIN benefactores b
           ON v.benefactor_id = b.id
         WHERE v.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          AND v.anulado = 0
           AND ? = 1
       ) AS comprobantes
       ORDER BY fecha DESC

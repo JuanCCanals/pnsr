@@ -155,7 +155,7 @@ router.get('/general', authenticateToken, authorizePermission('reportes'), async
     const [[{total_cajas}]]=await pool.query(`SELECT COUNT(*) AS total_cajas FROM cajas`);
     const [[{cajas_vendidas}]]=await pool.query(`SELECT COUNT(*) AS cajas_vendidas FROM cajas WHERE estado IN ('entregada','devuelta','entregada_familia','asignada')`);
     const [[{cajas_devueltas}]]=await pool.query(`SELECT COUNT(*) AS cajas_devueltas FROM cajas WHERE estado IN ('devuelta','entregada_familia')`);
-    const [[{dinero_ingresado}]]=await pool.query(`SELECT COALESCE(SUM(v.monto),0) AS dinero_ingresado FROM ventas v`);
+    const [[{dinero_ingresado}]]=await pool.query(`SELECT COALESCE(SUM(v.monto),0) AS dinero_ingresado FROM ventas v WHERE v.anulado = 0`);
     const pv=total_cajas>0?((cajas_vendidas/total_cajas)*100).toFixed(1):'0.0';
     const pd=cajas_vendidas>0?((cajas_devueltas/cajas_vendidas)*100).toFixed(1):'0.0';
     // Benefactor se saca de la venta más reciente asociada a la caja
@@ -196,6 +196,8 @@ router.get('/pagos-cajas', authenticateToken, authorizePermission('reportes'), a
     const buscar = (req.query.buscar || '').trim();
 
     const w = [], a = [];
+    // Excluir ventas anuladas del reporte contable de cajas
+    w.push(`v.anulado = 0`);
     if (desde) { w.push(`vp.fecha >= ?`); a.push(desde); }
     if (hasta) { w.push(`vp.fecha <= ?`); a.push(hasta); }
     if (forma_pago) { w.push(`vp.forma_pago = ?`); a.push(forma_pago); }

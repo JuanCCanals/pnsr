@@ -61,6 +61,8 @@ export default function Ventas() {
   const { hasPermission } = useAuth();
   const canCreate = hasPermission('venta_cajas', 'crear');
   const canUpdate = hasPermission('venta_cajas', 'actualizar');
+  // Anular reutiliza el permiso 'eliminar' (Admin y Supervisor; NO Operador Social)
+  const canAnular = hasPermission('venta_cajas', 'eliminar');
 
   // ---------- listado / filtros ----------
   const [rows, setRows] = useState([]);
@@ -206,6 +208,37 @@ export default function Ventas() {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  // ---------- anular venta de caja ----------
+  // Reutiliza el permiso 'eliminar'. Pide motivo, confirma, libera la(s) caja(s)
+  // y revierte excedentes en el backend. El historial se conserva.
+  async function handleAnular(venta) {
+    const motivo = window.prompt('Motivo de anulación (obligatorio):');
+    if (motivo === null) return; // canceló el prompt
+    const motivoTrim = String(motivo).trim();
+    if (!motivoTrim) {
+      alert('Debes indicar un motivo para la anulación.');
+      return;
+    }
+    if (!window.confirm(
+      `¿Confirmas la anulación de la venta ${venta.recibo || '#' + venta.id}?\n\n` +
+      'La(s) caja(s) volverán a estar disponibles y el monto dejará de contar en KPIs e informes. ' +
+      'El registro se conserva para auditoría.'
+    )) return;
+
+    try {
+      const resp = await ventasService.anular(venta.id, motivoTrim);
+      if (resp?.success) {
+        alert('Venta anulada correctamente.');
+        fetchRows();
+      } else {
+        alert(resp?.error || resp?.message || 'No se pudo anular la venta.');
+      }
+    } catch (e) {
+      const msg = e?.response?.data?.error || e?.message || 'Error de conexión al anular.';
+      alert(msg);
     }
   }
 
@@ -803,14 +836,23 @@ export default function Ventas() {
                     <td className="px-5 py-3 whitespace-nowrap">{toYMD(r.fecha_devolucion) || "—"}</td>
 
                     <td className="px-5 py-3 whitespace-nowrap">
-                      <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
-                        {r.cajas_estado ? r.cajas_estado.split(', ').map(e => mapEstadoDB(e)).join(', ') : prettyEstado(r.estado)}
-                      </span>
+                      {r.anulado ? (
+                        <span
+                          className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200"
+                          title={r.motivo_anulacion ? `Motivo: ${r.motivo_anulacion}` : 'Venta anulada'}
+                        >
+                          ANULADA
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
+                          {r.cajas_estado ? r.cajas_estado.split(', ').map(e => mapEstadoDB(e)).join(', ') : prettyEstado(r.estado)}
+                        </span>
+                      )}
                     </td>
 
                     <td className="px-5 py-3 whitespace-nowrap">
                       <div className="flex gap-2">
-                        {canUpdate && <button
+                        {!r.anulado && canUpdate && <button
                           className="px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700"
                           onClick={() => openEditModal(r)}
                         >
@@ -823,6 +865,13 @@ export default function Ventas() {
                         >
                           🖨️ Imprimir ticket
                         </button>
+                        {!r.anulado && canAnular && <button
+                          className="px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+                          onClick={() => handleAnular(r)}
+                          title="Anular la venta (libera la caja, mantiene historial)"
+                        >
+                          Anulación
+                        </button>}
                       </div>
                     </td>
                   </tr>
