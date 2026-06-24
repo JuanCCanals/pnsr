@@ -409,10 +409,13 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
         throw new Error('Cada forma de pago debe tener un método seleccionado y un monto válido');
       }
 
+      // moneda: 'USD' solo marca que el efectivo se recibió en dólares;
+      // el monto sigue registrado en soles (no se hace conversión).
+      const monedaPago = String(pago.moneda || '').toUpperCase() === 'USD' ? 'USD' : 'PEN';
       await connection.execute(`
-        INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [cobro_id, pago.metodo_pago_id, pago.monto,
+        INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, moneda, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [cobro_id, pago.metodo_pago_id, pago.monto, monedaPago,
           pago.fecha_operacion || null, pago.hora_operacion || null,
           pago.nro_operacion || null, pago.obs_operacion || null]);
     }
@@ -619,10 +622,11 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
       if (!pago.metodo_pago_id || !pago.monto) {
         throw new Error('Cada forma de pago debe tener un método seleccionado y un monto válido');
       }
+      const monedaPago = String(pago.moneda || '').toUpperCase() === 'USD' ? 'USD' : 'PEN';
       await connection.execute(
-        `INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, pago.metodo_pago_id, pago.monto,
+        `INSERT INTO cobros_pagos (cobro_id, metodo_pago_id, monto, moneda, fecha_operacion, hora_operacion, nro_operacion, obs_operacion)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, pago.metodo_pago_id, pago.monto, monedaPago,
          pago.fecha_operacion || null, pago.hora_operacion || null,
          pago.nro_operacion || null, pago.obs_operacion || null]
       );
@@ -675,6 +679,7 @@ router.get('/:id', authenticateToken, authorizePermission('registrar-servicios.l
         cp.id,
         cp.metodo_pago_id,
         cp.monto,
+        cp.moneda,
         cp.fecha_operacion,
         cp.hora_operacion,
         cp.nro_operacion,
@@ -743,7 +748,7 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
 
     // Obtener pagos con datos de operación por pago
     const [pagos] = await pool.query(`
-      SELECT cp.monto, mp.nombre as metodo,
+      SELECT cp.monto, cp.moneda, mp.nombre as metodo,
              cp.fecha_operacion, cp.hora_operacion, cp.nro_operacion, cp.obs_operacion
       FROM cobros_pagos cp
       JOIN metodos_pago mp ON cp.metodo_pago_id = mp.id
@@ -972,6 +977,11 @@ router.get('/:id/ticket', authenticateToken, authorizePermission('registrar-serv
     pagos.forEach(pago => {
       doc.fontSize(7).font('Helvetica-Bold')
          .text(`  • ${pago.metodo}: S/ ${Number(pago.monto).toFixed(2)}`, M);
+      // Marca de pago recibido en dólares (el monto se registra en soles)
+      if (String(pago.moneda || '').toUpperCase() === 'USD') {
+        doc.font('Helvetica-Oblique').fontSize(6.5)
+           .text('      Recibido en dólares (US$)', M);
+      }
       // Datos de operación (solo si el método no es efectivo y existen datos)
       const esEfectivo = String(pago.metodo || '').toLowerCase() === 'efectivo';
       if (!esEfectivo) {

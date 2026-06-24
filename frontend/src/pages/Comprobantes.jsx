@@ -153,7 +153,7 @@ const Comprobantes = () => {
           tipo: c.tipo === 'caja' ? 'Caja del Amor' : 'Servicio',
           concepto: c.concepto || '',
           beneficiario: c.beneficiario || '',
-          metodo_pago: c.metodo_pago || '',
+          metodo_pago: (c.metodo_pago || '') + (c.pago_usd ? ' (US$)' : ''),
           monto: Number(c.monto || 0),
         });
       });
@@ -364,6 +364,7 @@ const Comprobantes = () => {
                     </td>
                     <td className="px-4 py-3 text-gray-700 dark:text-gray-200">
                       {c.metodo_pago || '-'}
+                      {c.pago_usd ? <span className="ml-1 font-semibold text-emerald-700 dark:text-emerald-400">(US$)</span> : null}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-900 dark:text-white">
                       {formatMoneda(c.monto)}

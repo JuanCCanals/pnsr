@@ -304,6 +304,7 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
         s.descripcion AS descripcion_servicio, cl.nombre AS cliente_nombre, cl.telefono AS cliente_telefono,
         co.servicio_nombre_temp,
         u.nombre AS usuario_nombre, u.email AS usuario_email,
+        MAX(cp.moneda = 'USD') AS pago_usd,
         GROUP_CONCAT(DISTINCT mp.nombre ORDER BY mp.nombre SEPARATOR ', ') AS metodo_pago,
         GROUP_CONCAT(DISTINCT CONCAT(mp.nombre, ': S/ ', FORMAT(cp.monto, 2)) ORDER BY mp.nombre SEPARATOR ' | ') AS detalle_pagos,
         MAX(cp.fecha_operacion) AS fecha_operacion,

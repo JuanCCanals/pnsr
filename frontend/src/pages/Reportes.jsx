@@ -600,7 +600,7 @@ const CobrosReporte = () => {
           ID: r.id, Concepto: r.concepto || r.servicio_nombre_temp || '', Monto: r.monto,
           'Fecha Cobro': fmtDate(r.fecha_cobro), 'Nro. Comprobante': r.numero_comprobante || '',
           Usuario: r.usuario_nombre || '',
-          'Método(s) Pago': r.metodo_pago || '', 'Detalle Pagos': r.detalle_pagos || '',
+          'Método(s) Pago': (r.metodo_pago || '') + (r.pago_usd ? ' (US$)' : ''), 'Detalle Pagos': r.detalle_pagos || '',
           'Fec. Operación': fmtDate(r.fecha_operacion), 'Hora Operación': r.hora_operacion || '',
           'Nro. Operación': r.nro_operacion || '', 'Obs. Operación': r.obs_operacion || '',
           'Tipo Servicio': r.tipo_servicio || '',
@@ -627,7 +627,7 @@ const CobrosReporte = () => {
                 <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_cobro)}</td>
                 <td className="px-3 py-2 dark:text-white">{r.numero_comprobante || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.usuario_nombre || '—'}</td>
-                <td className="px-3 py-2 dark:text-white">{r.metodo_pago || '—'}</td>
+                <td className="px-3 py-2 dark:text-white">{r.metodo_pago || '—'}{r.pago_usd ? ' (US$)' : ''}</td>
                 <td className="px-3 py-2 dark:text-white text-xs">{r.detalle_pagos || '—'}</td>
                 <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_operacion)}</td>
                 <td className="px-3 py-2 dark:text-white">{r.hora_operacion || '—'}</td>

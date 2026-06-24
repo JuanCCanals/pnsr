@@ -242,7 +242,7 @@ const [buscandoDNI, setBuscandoDNI] = useState(false);
 const [dniApi, setDniApi] = useState('apisperu'); // 'apisperu' o 'apisnetpe'
 const [metodosPago, setMetodosPago] = useState([]);
 const [pagos, setPagos] = useState([
-  { metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }
+  { metodo_pago_id: '', monto: '', moneda: 'PEN', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }
 ]);
 const [mostrarTicketAuto, setMostrarTicketAuto] = useState(false);
 
@@ -505,7 +505,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
   // ========== GESTIÓN PAGOS MÚLTIPLES ==========
   const agregarPago = () => {
     if (pagos.length < 2) {
-      setPagos([...pagos, { metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+      setPagos([...pagos, { metodo_pago_id: '', monto: '', moneda: 'PEN', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     }
   };
 
@@ -732,6 +732,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           return {
             metodo_pago_id: parseInt(p.metodo_pago_id),
             monto: parseFloat(p.monto),
+            // 'USD' solo marca efectivo recibido en dólares (el monto queda en soles)
+            moneda: (esEfectivo && p.moneda === 'USD') ? 'USD' : 'PEN',
             fecha_operacion: !esEfectivo ? (p.fecha_operacion || null) : null,
             hora_operacion: !esEfectivo ? (p.hora_operacion || null) : null,
             nro_operacion: !esEfectivo ? (p.nro_operacion || null) : null,
@@ -898,7 +900,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     setShowModal(true);
 
     // Cargar items y pagos del cobro asociado
-    const defaultPago = [{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }];
+    const defaultPago = [{ metodo_pago_id: '', monto: '', moneda: 'PEN', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }];
     const defaultItem = [{ tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }];
 
     if (servicio.cobro_id) {
@@ -931,6 +933,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
             const pagosCargados = resp.data.pagos.map(p => ({
               metodo_pago_id: p.metodo_pago_id ? String(p.metodo_pago_id) : '',
               monto: p.monto != null ? String(p.monto) : '',
+              moneda: p.moneda === 'USD' ? 'USD' : 'PEN',
               fecha_operacion: p.fecha_operacion ? String(p.fecha_operacion).slice(0, 10) : '',
               hora_operacion: p.hora_operacion ? String(p.hora_operacion).slice(0, 5) : '',
               nro_operacion: p.nro_operacion || '',
@@ -1054,7 +1057,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     setEditingServicio(null);
     setErrors({});
     setItems([{ tipo_servicio_id: '', fecha_servicio: '', hora_servicio: '', cantidad: 1, precio: '' }]);
-    setPagos([{ metodo_pago_id: '', monto: '', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
+    setPagos([{ metodo_pago_id: '', monto: '', moneda: 'PEN', fecha_operacion: '', hora_operacion: '', nro_operacion: '', obs_operacion: '' }]);
     setMostrarTicketAuto(false);
     setModoCaja(false);
     setCajaFormData({ modalidad_id: "", punto_venta_id: "", codigo_caja: "", fecha_devolucion: "" });
@@ -1747,6 +1750,21 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                 </button>
               )}
             </div>
+
+            {/* Marca: efectivo recibido en dólares (el monto se registra en soles) */}
+            {metodoSel && metodoSel.nombre.toLowerCase() === 'efectivo' && (
+              <div className="mt-2">
+                <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pago.moneda === 'USD'}
+                    onChange={(e) => handlePagoChange(index, 'moneda', e.target.checked ? 'USD' : 'PEN')}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Recibido en dólares (US$)
+                </label>
+              </div>
+            )}
 
             {/* Datos de operación por pago — solo si el método NO es efectivo */}
             {esNoEfectivo && (

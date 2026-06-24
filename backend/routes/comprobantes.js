@@ -50,7 +50,12 @@ router.get('/', authenticateToken, authorizePermission('comprobantes.leer'), asy
             FROM cobros_pagos cp
             JOIN metodos_pago mp ON cp.metodo_pago_id = mp.id
             WHERE cp.cobro_id = c.id
-          ) AS metodo_pago
+          ) AS metodo_pago,
+          (
+            SELECT MAX(cp.moneda = 'USD')
+            FROM cobros_pagos cp
+            WHERE cp.cobro_id = c.id
+          ) AS pago_usd
         FROM cobros c
         LEFT JOIN servicios s
           ON c.servicio_id = s.id
@@ -79,7 +84,12 @@ router.get('/', authenticateToken, authorizePermission('comprobantes.leer'), asy
             SELECT GROUP_CONCAT(DISTINCT vp.forma_pago ORDER BY vp.forma_pago SEPARATOR ', ')
             FROM ventas_pagos vp
             WHERE vp.venta_id = v.id
-          ) AS metodo_pago
+          ) AS metodo_pago,
+          (
+            SELECT MAX(vp.moneda = 'USD')
+            FROM ventas_pagos vp
+            WHERE vp.venta_id = v.id
+          ) AS pago_usd
         FROM ventas v
         JOIN benefactores b
           ON v.benefactor_id = b.id
