@@ -306,7 +306,15 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
         u.nombre AS usuario_nombre, u.email AS usuario_email,
         MAX(cp.moneda = 'USD') AS pago_usd,
         GROUP_CONCAT(DISTINCT mp.nombre ORDER BY mp.nombre SEPARATOR ', ') AS metodo_pago,
-        GROUP_CONCAT(DISTINCT CONCAT(mp.nombre, ': S/ ', FORMAT(cp.monto, 2)) ORDER BY mp.nombre SEPARATOR ' | ') AS detalle_pagos,
+        -- Detalle de pagos vía subconsulta (NO DISTINCT): antes, dos pagos idénticos
+        -- (ej. Yape S/500 + Yape S/500) se colapsaban en una sola línea. La subconsulta
+        -- lee cobros_pagos directamente y lista cada pago, sin que el JOIN externo lo duplique.
+        (
+          SELECT GROUP_CONCAT(CONCAT(mp2.nombre, ': S/ ', FORMAT(cp2.monto, 2)) ORDER BY cp2.id SEPARATOR ' | ')
+          FROM cobros_pagos cp2
+          JOIN metodos_pago mp2 ON mp2.id = cp2.metodo_pago_id
+          WHERE cp2.cobro_id = co.id
+        ) AS detalle_pagos,
         MAX(cp.fecha_operacion) AS fecha_operacion,
         MAX(cp.hora_operacion) AS hora_operacion,
         GROUP_CONCAT(DISTINCT cp.nro_operacion SEPARATOR ', ') AS nro_operacion,
