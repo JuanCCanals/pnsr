@@ -10,8 +10,18 @@ const jwt = require('jsonwebtoken');
 // menos de RENOVAR_SI_QUEDA_MENOS_DE, se emite uno nuevo y se devuelve en la
 // cabecera X-Token-Renovado (el frontend lo guarda). Un usuario que trabaja a
 // diario nunca llega al vencimiento.
+// El umbral de renovacion estaba en 12 h y por eso la sesion deslizante NO
+// actuaba nunca en el horario real de la parroquia:
+//
+//   dia 1  08:00  inicia sesion        quedan 24 h  -> no renueva
+//   dia 1  18:00  se va a casa         quedan 14 h  -> no renueva
+//   dia 2  08:00  vuelve               quedan  0 h  -> ya vencio
+//
+// El token solo entraba en la ventana a las 20:00, con la oficina cerrada.
+// Con 23 h se renueva en cuanto la sesion cumple una hora de vida, de modo que
+// cualquier jornada de trabajo la refresca y ya no vuelve a vencer.
 const DURACION_TOKEN = '24h';
-const RENOVAR_SI_QUEDA_MENOS_DE = 12 * 60 * 60; // segundos
+const RENOVAR_SI_QUEDA_MENOS_DE = 23 * 60 * 60; // segundos
 
 // Hora de Lima en formato legible. forever no antepone marca de tiempo a lo que
 // escribe la aplicacion, asi que sin esto las lineas del log no se pueden cruzar

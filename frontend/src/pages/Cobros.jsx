@@ -18,6 +18,43 @@ function sesionVencida() {
   }
 }
 
+// ========== BORRADOR DEL FORMULARIO ==========
+// Cuando la pagina se recarga a media carga de datos —sesion vencida, F5 sin
+// querer, corte de energia— se perdia todo lo escrito y habia que reingresarlo.
+// Aqui se conserva una copia en el navegador mientras el operador escribe, y al
+// volver se le ofrece recuperarla. Asi la CAUSA de la recarga deja de importar.
+//
+// Es un extra: si el almacenamiento falla (modo privado, disco lleno) se ignora
+// en silencio; nunca debe impedir que el formulario funcione.
+const BORRADOR_VIGENCIA_MS = 24 * 60 * 60 * 1000;
+
+function claveBorrador() {
+  let id = 'anon';
+  try { id = JSON.parse(localStorage.getItem('user') || '{}')?.id ?? 'anon'; } catch { /* sin sesion */ }
+  return `borrador_servicio_${id}`;   // por usuario: la PC es compartida
+}
+
+function guardarBorrador(datos) {
+  try {
+    localStorage.setItem(claveBorrador(), JSON.stringify({ ...datos, guardadoEn: Date.now() }));
+  } catch { /* sin almacenamiento disponible */ }
+}
+
+function borrarBorrador() {
+  try { localStorage.removeItem(claveBorrador()); } catch { /* nada que hacer */ }
+}
+
+function leerBorrador() {
+  try {
+    const crudo = localStorage.getItem(claveBorrador());
+    if (!crudo) return null;
+    const b = JSON.parse(crudo);
+    // Un borrador viejo confunde mas que ayuda.
+    if (!b?.guardadoEn || Date.now() - b.guardadoEn > BORRADOR_VIGENCIA_MS) { borrarBorrador(); return null; }
+    return b;
+  } catch { return null; }
+}
+
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
 
 function printTicket80(cobro) {
@@ -326,6 +363,39 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     { value: 'realizado',  label: 'Realizado',  color: 'bg-green-100 text-green-800' },
     { value: 'cancelado',  label: 'Cancelado',  color: 'bg-red-100 text-red-800' }
   ];
+
+  // Borrador pendiente de una sesion anterior (ver helpers al inicio del archivo)
+  const [borrador, setBorrador] = useState(null);
+
+  useEffect(() => { setBorrador(leerBorrador()); }, []);
+
+  // Copia continua de lo que se esta escribiendo. Solo para altas nuevas: al
+  // editar, los datos ya estan a salvo en la base.
+  useEffect(() => {
+    if (!showModal || editingServicio) return;
+    const hayAlgoEscrito =
+      String(formData.cliente_nombre || '').trim() !== '' ||
+      items.some(i => i.tipo_servicio_id || i.precio) ||
+      pagos.some(p => p.monto);
+    if (!hayAlgoEscrito) return;
+    guardarBorrador({ formData, items, pagos, modoCaja, cajaFormData });
+  }, [showModal, editingServicio, formData, items, pagos, modoCaja, cajaFormData]);
+
+  const recuperarBorrador = () => {
+    if (!borrador) return;
+    setFormData(borrador.formData || {});
+    if (borrador.items?.length) setItems(borrador.items);
+    if (borrador.pagos?.length) setPagos(borrador.pagos);
+    setModoCaja(!!borrador.modoCaja);
+    if (borrador.cajaFormData) setCajaFormData(borrador.cajaFormData);
+    setEditingServicio(null);
+    setErrors({});
+    setShowModal(true);
+    setBorrador(null);
+    borrarBorrador();
+  };
+
+  const descartarBorrador = () => { borrarBorrador(); setBorrador(null); };
 
   // Cargar datos iniciales / con filtros
   useEffect(() => {
@@ -850,8 +920,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         }
       }
 
-      // Limpiar y cerrar
+      // Limpiar y cerrar. El borrador ya cumplio su funcion: se descarta para no
+      // ofrecer luego recuperar algo que ya esta guardado.
       resetForm();
+      borrarBorrador();
       setShowModal(false);
       // Volver a la primera pagina: el registro recien creado se lista primero,
       // asi que desde otra pagina el operador no lo veia y creia que no se guardo.
@@ -1161,6 +1233,26 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       </button>}
 
 
+      {/* Quedo informacion a medio escribir de una sesion anterior */}
+      {borrador && !showModal && (
+        <div className="mb-4 p-4 bg-amber-50 border border-amber-400 rounded flex flex-wrap items-center gap-3">
+          <span className="text-amber-900 text-sm flex-1 min-w-[16rem]">
+            Se encontró un registro que quedó sin guardar
+            {borrador.guardadoEn && ` (${new Date(borrador.guardadoEn).toLocaleString('es-PE', { timeZone: 'America/Lima', hour12: false })})`}
+            {borrador.formData?.cliente_nombre ? `, a nombre de ${borrador.formData.cliente_nombre}` : ''}.
+            Puede recuperarlo en lugar de volver a escribirlo.
+          </span>
+          <button onClick={recuperarBorrador}
+            className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700">
+            Recuperar
+          </button>
+          <button onClick={descartarBorrador}
+            className="px-4 py-2 border border-amber-500 text-amber-800 rounded-lg text-sm hover:bg-amber-100">
+            Descartar
+          </button>
+        </div>
+      )}
+
       {/* Mensajes (solo cuando NO hay modal abierto) */}
       {successMessage && <div className="mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded">{successMessage}</div>}
       {errors.general && !showModal && <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">{errors.general}</div>}
@@ -1372,7 +1464,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
                   {editingServicio ? 'Editar Servicio' : modoCaja ? '🎁 Nueva Venta — Caja del Amor' : 'Nuevo Servicio'}
                 </h2>
                 <button
-                  onClick={() => setShowModal(false)}
+                  onClick={() => { setShowModal(false); borrarBorrador(); }}
                   className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1924,7 +2016,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
   <div className="flex justify-end space-x-3 pt-4">
     <button
       type="button"
-      onClick={() => setShowModal(false)}
+      onClick={() => { setShowModal(false); borrarBorrador(); }}
       className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
     >
       Cancelar
