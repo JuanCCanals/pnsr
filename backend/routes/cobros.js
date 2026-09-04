@@ -21,15 +21,25 @@ const LOGO_PATH = path.join(__dirname, '..', '..', 'logos', 'Logo-PNSR-Web1.png'
 // ===================================================================
 
 /**
- * Generar correlativo para serie
+ * Generar correlativo para serie.
+ *
+ * Debe recibir la MISMA conexion que esta ejecutando la transaccion. Antes leia
+ * con `pool.execute`, es decir por fuera de la transaccion y sin bloqueo: si dos
+ * cobros se guardaban a la vez (o el operador hacia doble clic en "Crear"), ambos
+ * leian el mismo MAX(correlativo), generaban el mismo numero y el segundo INSERT
+ * chocaba con el UNIQUE de `comprobantes.numero` devolviendo un error 500.
+ *
+ * Con FOR UPDATE la segunda transaccion espera a que la primera confirme, y lee
+ * el correlativo ya actualizado.
  */
-async function generarCorrelativo(serie = 'T001') {
-  const [rows] = await pool.execute(`
+async function generarCorrelativo(connection, serie = 'T001') {
+  const [rows] = await connection.execute(`
     SELECT MAX(correlativo) as max_correlativo
     FROM comprobantes
     WHERE serie = ?
+    FOR UPDATE
   `, [serie]);
-  
+
   const siguiente = (rows[0]?.max_correlativo || 0) + 1;
   return siguiente;
 }
@@ -105,9 +115,98 @@ async function ensureCliente(connection, nombre, dni = '', telefono = '', email 
 // ENDPOINTS
 // ===================================================================
 
+// ===================================================================
+// PROXY DE CONSULTA DNI / RUC  (evita el CORS del navegador)
+// ===================================================================
+/**
+ * Proveedor: apis.net.pe (en la pantalla de Cobros el radio se llama "Optimize").
+ *
+ * El token estaba escrito aquí como valor por defecto, de modo que vivía en el
+ * repositorio y en todo el historial de git, y no se podía rotar sin desplegar.
+ * Ahora sale del .env; si falta, se responde 503 diciendo qué configurar en vez
+ * de un 401 mudo, y si el proveedor falla se reenvía su mensaje real.
+ *
+ * OJO con una conclusión equivocada de agosto de 2026: el proveedor devolvió 401
+ * durante unos días y se dio por supuesto que había migrado a decolecta.com y que
+ * los tokens `apis-token-...` estaban muertos. Se comprobó el 04/09/2026 que NO
+ * era así: el mismo token sigue respondiendo bien contra api.apis.net.pe/v2 (un
+ * DNI inválido devuelve 422, no 401), y esa ruta en decolecta ni existe (404).
+ * Fue una caída temporal. La URL queda configurable por si algún día migra de
+ * verdad, pero el valor por defecto es el que funciona.
+ */
+const APISNETPE_URL = process.env.APISNETPE_URL || 'https://api.apis.net.pe/v2';
+const APISNETPE_TOKEN = process.env.APISNETPE_TOKEN || '';
+
+/**
+ * Consulta un documento en apis.net.pe / decolecta.
+ * Devuelve { ok: true, data } o { ok: false, status, error } con un mensaje
+ * que ya se puede enseñar tal cual al usuario.
+ */
+async function consultarApisNetPe(tipo, numero) {
+  if (!APISNETPE_TOKEN) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'Falta APISNETPE_TOKEN en el .env del backend. Mientras tanto, ' +
+             'use la opcion APISPeru para consultar el documento.'
+    };
+  }
+
+  const ruta = tipo === 'dni' ? 'reniec/dni' : 'sunat/ruc';
+  const url = `${APISNETPE_URL}/${ruta}?numero=${numero}`;
+
+  const fetch = (await import('node-fetch')).default;
+  const response = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${APISNETPE_TOKEN}`, 'Accept': 'application/json' }
+  });
+
+  // Se lee como texto porque los cuerpos de error no siempre son JSON válido
+  const texto = await response.text();
+  let data = null;
+  try { data = JSON.parse(texto); } catch { /* respuesta no-JSON */ }
+
+  if (!response.ok) {
+    const detalle = (data && (data.message || data.error)) || texto.slice(0, 120);
+    let error;
+
+    if (response.status === 401 || response.status === 403) {
+      error = `Token de apis.net.pe vencido o inválido (${response.status}): ${detalle}`;
+    } else if (response.status === 404 || response.status === 422) {
+      error = `El documento ${numero} no existe o no es válido`;
+    } else if (response.status === 429) {
+      error = 'Se agotó la cuota de consultas de apis.net.pe';
+    } else {
+      error = `Error ${response.status} de apis.net.pe: ${detalle}`;
+    }
+
+    return { ok: false, status: response.status, error };
+  }
+
+  if (!data) {
+    return { ok: false, status: 502, error: 'La API externa devolvió una respuesta no válida' };
+  }
+
+  return { ok: true, data };
+}
+
+/**
+ * Devuelve el primer campo con contenido de entre varios nombres posibles.
+ *
+ * apis.net.pe y decolecta devuelven los MISMOS datos con nombres distintos
+ * (`nombres` vs `first_name`, `razonSocial` vs `razon_social`, ...). Sin esto,
+ * al cambiar de proveedor la consulta respondia "correcta" pero con el nombre
+ * en blanco: un fallo mudo, peor que un error visible. Se aceptan ambos.
+ */
+function campo(obj, ...nombres) {
+  for (const n of nombres) {
+    const v = obj?.[n];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
 /**
  * GET /api/cobros/consultar-dni/:dni
- * Proxy para consultar DNI en apis.net.pe (evita CORS del navegador)
  */
 router.get('/consultar-dni/:dni', authenticateToken, async (req, res) => {
   try {
@@ -118,36 +217,41 @@ router.get('/consultar-dni/:dni', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, error: 'DNI debe tener 8 dígitos' });
     }
 
-    let url, headers;
-
-    if (proveedor === 'apisnetpe') {
-      const token = process.env.APISNETPE_TOKEN || 'apis-token-5978.vALeomBsDdA-LujBZkqcczBrKxI1CBp6';
-      url = `https://api.apis.net.pe/v2/reniec/dni?numero=${dni}`;
-      headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/json' };
-    } else {
+    if (proveedor !== 'apisnetpe') {
       return res.status(400).json({ success: false, error: 'Proveedor no soportado en proxy' });
     }
 
-    const fetch = (await import('node-fetch')).default;
-    const response = await fetch(url, { headers });
+    const r = await consultarApisNetPe('dni', dni);
 
-    if (!response.ok) {
-      return res.status(response.status).json({ success: false, error: `Error ${response.status} desde API externa` });
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, error: r.error });
     }
 
-    const data = await response.json();
-    const nombres = data.nombres || '';
-    const apPat = data.apellidoPaterno || '';
-    const apMat = data.apellidoMaterno || '';
+    const data = r.data;
+    const nombres = campo(data, 'nombres', 'first_name', 'nombre');
+    const apPat = campo(data, 'apellidoPaterno', 'first_last_name', 'apellido_paterno');
+    const apMat = campo(data, 'apellidoMaterno', 'second_last_name', 'apellido_materno');
+    const completo = campo(data, 'nombreCompleto', 'full_name', 'nombre_completo')
+      || `${nombres} ${apPat} ${apMat}`.replace(/\s+/g, ' ').trim();
+
+    // Si el proveedor respondio 200 pero no reconocemos ningun campo con el
+    // nombre, es preferible avisar a devolver un cliente en blanco.
+    if (!completo) {
+      return res.status(502).json({
+        success: false,
+        error: 'La API externa respondio con un formato inesperado. Revise la ' +
+               'configuracion de APISNETPE_URL o use APISPeru.'
+      });
+    }
 
     res.json({
       success: true,
       data: {
-        dni: data.dni || dni,
+        dni: campo(data, 'dni', 'numeroDocumento', 'document_number', 'numero_documento') || dni,
         nombres,
         apellidoPaterno: apPat,
         apellidoMaterno: apMat,
-        nombreCompleto: `${nombres} ${apPat} ${apMat}`.trim()
+        nombreCompleto: completo
       }
     });
   } catch (error) {
@@ -158,7 +262,6 @@ router.get('/consultar-dni/:dni', authenticateToken, async (req, res) => {
 
 /**
  * GET /api/cobros/consultar-ruc/:ruc
- * Proxy para consultar RUC en apis.net.pe (evita CORS del navegador)
  * Devuelve razón social, dirección y estado del contribuyente.
  */
 router.get('/consultar-ruc/:ruc', authenticateToken, async (req, res) => {
@@ -169,29 +272,34 @@ router.get('/consultar-ruc/:ruc', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, error: 'RUC debe tener 11 dígitos' });
     }
 
-    const token = process.env.APISNETPE_TOKEN || 'apis-token-5978.vALeomBsDdA-LujBZkqcczBrKxI1CBp6';
-    const url = `https://api.apis.net.pe/v2/sunat/ruc?numero=${ruc}`;
-    const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/json' };
+    const r = await consultarApisNetPe('ruc', ruc);
 
-    const fetch = (await import('node-fetch')).default;
-    const response = await fetch(url, { headers });
-
-    if (!response.ok) {
-      return res.status(response.status).json({ success: false, error: `Error ${response.status} desde API externa` });
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, error: r.error });
     }
 
-    const data = await response.json();
+    const data = r.data;
+    const razon = campo(data, 'razonSocial', 'razon_social', 'nombre', 'name');
+
+    if (!razon) {
+      return res.status(502).json({
+        success: false,
+        error: 'La API externa respondio con un formato inesperado. Revise la ' +
+               'configuracion de APISNETPE_URL o use APISPeru.'
+      });
+    }
+
     res.json({
       success: true,
       data: {
-        ruc: data.ruc || ruc,
-        razonSocial: data.razonSocial || data.nombre || '',
-        nombreComercial: data.nombreComercial || '',
-        direccion: data.direccion || '',
-        estado: data.estado || '',
-        condicion: data.condicion || '',
+        ruc: campo(data, 'ruc', 'numeroDocumento', 'numero_documento', 'document_number') || ruc,
+        razonSocial: razon,
+        nombreComercial: campo(data, 'nombreComercial', 'nombre_comercial', 'trade_name'),
+        direccion: campo(data, 'direccion', 'address'),
+        estado: campo(data, 'estado', 'status'),
+        condicion: campo(data, 'condicion', 'condition'),
         // Compatibilidad con la interfaz de DNI para reutilizar el campo Cliente
-        nombreCompleto: data.razonSocial || data.nombre || ''
+        nombreCompleto: razon
       }
     });
   } catch (error) {
@@ -315,7 +423,7 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
 
     // Generar serie y correlativo
     const serie = 'T001'; // Puedes hacerlo configurable
-    const correlativo = await generarCorrelativo(serie);
+    const correlativo = await generarCorrelativo(connection, serie);
     const numero_comprobante = `${serie}-${String(correlativo).padStart(8, '0')}`;
 
     // Crear cobro

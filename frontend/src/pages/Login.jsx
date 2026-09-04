@@ -17,8 +17,11 @@ const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Obtener la ruta de donde venía el usuario
-  const from = location.state?.from?.pathname || '/dashboard';
+  // Obtener la ruta de donde venía el usuario. Cuando la sesión expira, el
+  // interceptor de axios recarga la página (se pierde el state de React Router),
+  // así que la ruta previa queda en sessionStorage para no dejar al usuario
+  // siempre en el Dashboard.
+  const from = location.state?.from?.pathname || sessionStorage.getItem('rutaPrevia') || '/dashboard';
 
   const handleChange = (e) => {
     const { name, value } = e.target;

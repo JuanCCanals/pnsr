@@ -42,7 +42,10 @@ const PUBLIC_PATHS = [
 // Middlewares
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true
+  credentials: true,
+  // Sin exposedHeaders el navegador oculta las cabeceras propias al JavaScript,
+  // y el frontend no podria leer el token renovado (ver middlewares/auth.js).
+  exposedHeaders: ['X-Token-Renovado']
 }));
 
 // Test rápido de que Express responde

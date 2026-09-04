@@ -28,11 +28,21 @@ api.interceptors.request.use(
 
 // Interceptor para manejar respuestas y errores
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // El backend renueva el token cuando le queda poca vida (ver
+    // middlewares/auth.js). Guardarlo aqui evita que la sesion venza de golpe
+    // mientras el operador tiene un formulario a medio llenar.
+    const renovado = response.headers?.['x-token-renovado'];
+    if (renovado) localStorage.setItem('token', renovado);
+    return response;
+  },
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      // Se recuerda donde estaba para volver ahi despues de iniciar sesion:
+      // window.location recarga la pagina y se pierde el state de React Router.
+      try { sessionStorage.setItem('rutaPrevia', window.location.pathname); } catch { /* modo privado */ }
       window.location.href = '/login';
     }
     return Promise.reject(error);

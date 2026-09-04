@@ -20,9 +20,11 @@ function validarSumaPagos(pagos, montoTotal) {
 
 // Generar el siguiente correlativo para una serie (T002 = Cajas del Amor).
 // Lee desde la tabla `ventas` (a diferencia de cobros.js que lee de `comprobantes`).
+// FOR UPDATE bloquea la serie hasta que la transaccion confirme: sin el, dos
+// ventas simultaneas leian el mismo MAX y generaban el mismo correlativo.
 async function generarCorrelativoVenta(conn, serie = 'T002') {
   const [rows] = await conn.query(
-    'SELECT MAX(correlativo) AS max_corr FROM ventas WHERE serie = ?',
+    'SELECT MAX(correlativo) AS max_corr FROM ventas WHERE serie = ? FOR UPDATE',
     [serie]
   );
   return (rows[0]?.max_corr || 0) + 1;

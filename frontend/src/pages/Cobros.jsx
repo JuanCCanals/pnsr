@@ -1,8 +1,22 @@
 // frontend/src/pages/Cobros.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { cobrosService, metodoPagoService, catalogosService, ventasService } from '../services/api';
 import { consultarDocumento } from '../services/dniService';
 import { useAuth } from '../contexts/AuthContext';
+
+// Lee el vencimiento del JWT sin llamar al servidor. Se considera vencida tambien
+// la sesion a la que le queda menos de un minuto, para no empezar a guardar algo
+// que va a fallar a mitad de camino.
+function sesionVencida() {
+  const t = localStorage.getItem('token');
+  if (!t) return true;
+  try {
+    const { exp } = JSON.parse(atob(t.split('.')[1]));
+    return !exp || exp * 1000 < Date.now() + 60000;
+  } catch {
+    return true;
+  }
+}
 
 // ========== HELPERS HTTP (solo fetch + JWT) ==========
 
@@ -236,6 +250,12 @@ const Servicios = () => {
 
   const [errors, setErrors] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
+
+  // Guardado en curso. `guardandoRef` es la proteccion real contra el doble clic:
+  // setEstado() es asincrono y dos clics muy seguidos alcanzaban a pasar los dos.
+  // El estado solo sirve para deshabilitar el boton y cambiar su texto.
+  const [guardando, setGuardando] = useState(false);
+  const guardandoRef = useRef(false);
 
   // ========== NUEVOS ESTADOS ==========
 const [buscandoDNI, setBuscandoDNI] = useState(false);
@@ -547,9 +567,25 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    // Doble clic en "Crear": antes se disparaban dos POST. El primero guardaba y
+    // limpiaba el formulario; el segundo fallaba con error 500 (correlativo
+    // duplicado) y pintaba el mensaje rojo sobre un formulario ya vacio. El
+    // operador creia que no se habia guardado y lo reingresaba todo: duplicado.
+    if (guardandoRef.current) return;
+
+    // La sesion dura 24 h. Si vencio mientras el formulario estaba abierto, el
+    // primer POST devolvia 401 y el interceptor recargaba la pagina, perdiendo
+    // todo lo escrito. Ahora se detecta ANTES de enviar y los datos se conservan.
+    if (sesionVencida()) {
+      return setErrors({ general: 'Su sesión expiró. No cierre esta ventana: inicie sesión en otra pestaña del navegador y vuelva a presionar Crear. Los datos que ingresó se conservan.' });
+    }
+
+    guardandoRef.current = true;
+    setGuardando(true);
     setErrors({});
     setSuccessMessage('');
-    
+
     try {
       // Validación común
       if (!formData.cliente_nombre || !formData.cliente_nombre.trim()) {
@@ -817,6 +853,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       // Limpiar y cerrar
       resetForm();
       setShowModal(false);
+      // Volver a la primera pagina: el registro recien creado se lista primero,
+      // asi que desde otra pagina el operador no lo veia y creia que no se guardo.
+      setCurrentPage(1);
       loadServicios();
       loadStats();
 
@@ -842,6 +881,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       setErrors({ general: msg });
     } finally {
       setLoading(false);
+      guardandoRef.current = false;
+      setGuardando(false);
     }
   };
 
@@ -1105,8 +1146,15 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         <p className="text-gray-600 dark:text-gray-400">Registra servicios (Bautismo, Matrimonio, etc.) y su estado</p>
       </div>
 
+      {/* Si la sesion ya vencio, se avisa ANTES de que el operador llene nada. */}
       {canCreate && <button
-        onClick={() => { resetForm(); setShowModal(true); }}
+        onClick={() => {
+          if (sesionVencida()) {
+            setErrors({ general: 'Su sesión expiró. Vuelva a iniciar sesión antes de registrar un servicio.' });
+            return;
+          }
+          resetForm(); setShowModal(true);
+        }}
         className="mb-6 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 font-medium"
       >
         Nuevo
@@ -1570,6 +1618,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
           name="cliente_dni"
           value={formData.cliente_dni}
           onChange={(e) => setFormData({...formData, cliente_dni: e.target.value.replace(/\D/g, '')})}
+          // Enter en este campo enviaba el formulario completo (era el submit por
+          // defecto). Ahora dispara la busqueda del documento, que es lo esperado.
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleBuscarDNI(); } }}
           maxLength="11"
           className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white text-sm"
           placeholder="DNI (8) o RUC (11)"
@@ -1880,9 +1931,10 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     </button>
     <button
       type="submit"
-      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+      disabled={guardando}
+      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      {editingServicio ? 'Actualizar' : 'Crear'}
+      {guardando ? 'Guardando…' : (editingServicio ? 'Actualizar' : 'Crear')}
     </button>
 
 
