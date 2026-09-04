@@ -547,6 +547,11 @@ router.post('/', authenticateToken, authorizePermission('registrar-servicios.cre
 
   } catch (error) {
     await connection.rollback();
+    // Un guardado que se revierte no deja NINGUN rastro en la base (por eso la
+    // tabla cobros no tiene huecos). Sin esta linea, un formulario perdido era
+    // indetectable a posteriori. Se registran los datos minimos para poder
+    // reconstruirlo y avisar al operador.  grep '\[GUARDADO\]' /var/log/forever/pnsr.log
+    console.error(`[GUARDADO] Cobro NO creado, revertido | usuario=${req.user?.email || req.user?.id} | cliente=${String(req.body?.cliente_nombre || '').slice(0, 60)} | monto=${req.body?.monto} | items=${Array.isArray(req.body?.items) ? req.body.items.length : 0} | motivo=${error.message}`);
     console.error('Error creando cobro:', error);
     res.status(500).json({
       success: false,
@@ -745,6 +750,7 @@ router.put('/:id', authenticateToken, authorizePermission('registrar-servicios.a
     res.json({ success: true, data: { cobro_id: Number(id) } });
   } catch (error) {
     await connection.rollback();
+    console.error(`[GUARDADO] Cobro NO actualizado, revertido | cobro=${req.params?.id} | usuario=${req.user?.email || req.user?.id} | cliente=${String(req.body?.cliente_nombre || '').slice(0, 60)} | monto=${req.body?.monto} | motivo=${error.message}`);
     console.error('Error actualizando cobro:', error);
     res.status(500).json({
       success: false,

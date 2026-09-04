@@ -23,9 +23,19 @@ module.exports = function authenticateToken(req, res, next) {
 
   jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
     if (err) {
+      // Se deja constancia en el log. Cuando un operador dice que perdio el
+      // formulario, esta es la unica forma de saber despues si fue por la
+      // sesion: sin registro habria que deducirlo. Se marca con [SESION] para
+      // poder filtrarlo:  grep '\[SESION\]' /var/log/forever/pnsr.log
+      let quien = 'desconocido';
+      try { quien = jwt.decode(token)?.email || 'desconocido'; } catch { /* token ilegible */ }
+      const donde = `${req.method} ${req.originalUrl}`;
+
       if (err.name === 'TokenExpiredError') {
+        console.warn(`[SESION] Token vencido | usuario=${quien} | ${donde} | ip=${req.ip}`);
         return res.status(401).json({ message: 'Sesión expirada' });
       }
+      console.warn(`[SESION] Token invalido (${err.name}) | usuario=${quien} | ${donde} | ip=${req.ip}`);
       return res.status(403).json({ message: 'Token inválido' });
     }
 
