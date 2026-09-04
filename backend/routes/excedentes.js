@@ -35,12 +35,16 @@ router.get(
       const conditions = [];
       const params = [];
 
+      // `excedentes.fecha` es TIMESTAMP y el filtro llega como 'YYYY-MM-DD'.
+      // Con `<= ?` MySQL asumia las 00:00:00 y se perdia el ultimo dia del rango
+      // (mismo defecto que tenia el reporte de Cobros). Se compara contra el dia
+      // siguiente para incluir la jornada completa sin anular el indice.
       if (desde) {
         conditions.push('e.fecha >= ?');
         params.push(desde);
       }
       if (hasta) {
-        conditions.push('e.fecha <= ?');
+        conditions.push('e.fecha < DATE_ADD(?, INTERVAL 1 DAY)');
         params.push(hasta);
       }
 

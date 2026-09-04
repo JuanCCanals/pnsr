@@ -5,7 +5,22 @@ import * as XLSX from 'xlsx';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const hdr = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}` });
 const get = async (url) => { const r = await fetch(`${API}${url}`, { headers: hdr() }); return r.json(); };
-const toYMD = (v) => { if (!v) return ''; const d = new Date(v); if (isNaN(d)) return ''; return d.toISOString().slice(0, 10); };
+// Formatea SIEMPRE en hora de Lima, igual que el ticket impreso.
+// Antes se usaba toISOString(), que devuelve UTC: un cobro registrado a las 19:41
+// del 30/07 se mostraba como 31/07 (a partir de las 19:00 el dia ya cambio en UTC).
+// 'en-CA' es el locale que produce el formato YYYY-MM-DD.
+const LIMA_YMD = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+const toYMD = (v) => {
+  if (!v) return '';
+  // Las columnas DATE llegan como 'YYYY-MM-DD' sin hora: se usan tal cual, sin
+  // convertirlas a Date (eso volveria a introducir un desfase de zona horaria).
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  if (isNaN(d)) return typeof v === 'string' ? v.slice(0, 10) : '';
+  return LIMA_YMD.format(d);
+};
 const fmtDate = (v) => { const s = toYMD(v); if (!s) return '—'; const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; };
 const fmtMoney = (v) => `S/ ${Number(v || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}`;
 
@@ -569,15 +584,31 @@ const CobrosReporte = () => {
   const [fDesde, setFDesde] = useState('');
   const [fHasta, setFHasta] = useState('');
   const [fMetodo, setFMetodo] = useState('');
+  const [error, setError] = useState('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError('');
     const p = new URLSearchParams();
     if (fDesde) p.set('desde', fDesde);
     if (fHasta) p.set('hasta', fHasta);
     if (fMetodo) p.set('metodo_pago_id', fMetodo);
-    const r = await get(`/reportes/cobros?${p}`);
-    if (r.success) { setRows(r.data); setTotal(r.total || 0); if (r.metodos) setMetodos(r.metodos); }
+    try {
+      const r = await get(`/reportes/cobros?${p}`);
+      if (r.success) {
+        setRows(r.data); setTotal(r.total || 0); if (r.metodos) setMetodos(r.metodos);
+      } else {
+        // Antes se ignoraba el fallo: la tabla quedaba vacia o con datos viejos y
+        // era imposible distinguir "no hay cobros" de "el reporte no cargo".
+        setRows([]); setTotal(0);
+        setError(r.message === 'Sesión expirada'
+          ? 'Su sesión expiró. Vuelva a iniciar sesión para ver el reporte.'
+          : (r.error || 'No se pudo cargar el reporte. Intente nuevamente.'));
+      }
+    } catch {
+      setRows([]); setTotal(0);
+      setError('No se pudo conectar con el servidor. Los datos mostrados NO están completos.');
+    }
     setLoading(false);
   }, [fDesde, fHasta, fMetodo]);
 
@@ -609,6 +640,11 @@ const CobrosReporte = () => {
           Observaciones: r.observaciones || '',
         })), 'Ingresos_Cobros')} disabled={!rows.length} />
       </div>
+      {error && (
+        <div className="mb-3 px-4 py-3 rounded-lg border border-red-300 bg-red-50 text-sm text-red-800">
+          <span className="font-semibold">No se pudo obtener el reporte. </span>{error}
+        </div>
+      )}
       <div className="text-xs text-gray-500 mb-2">{rows.length} cobro(s) | Total: <span className="font-semibold text-green-700">{fmtMoney(total)}</span></div>
       <div className="overflow-x-auto border rounded-lg">
         <table className="min-w-full text-sm">

@@ -294,8 +294,15 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
     const w=[],a=[];
     // Excluir cobros anulados de los reportes contables
     w.push(`co.anulado = 0`);
-    if(desde){w.push(`co.fecha_cobro>=?`);a.push(desde);}
-    if(hasta){w.push(`co.fecha_cobro<=?`);a.push(hasta);}
+    // `cobros.fecha_cobro` es TIMESTAMP (guarda fecha Y hora), pero los filtros
+    // llegan como fecha suelta 'YYYY-MM-DD'. MySQL completaba la hora con 00:00:00,
+    // asi que `fecha_cobro <= '2026-07-31'` significaba "hasta las 00:00 del 31" y
+    // dejaba fuera TODO el ultimo dia del mes. Esos cobros tampoco salian en el mes
+    // siguiente (son anteriores al dia 1), por lo que quedaban invisibles.
+    // Se usa `< dia siguiente` en lugar de `DATE(fecha_cobro) <=` para no anular
+    // el indice idx_fecha_cobro.
+    if(desde){w.push(`co.fecha_cobro >= ?`);a.push(desde);}
+    if(hasta){w.push(`co.fecha_cobro < DATE_ADD(?, INTERVAL 1 DAY)`);a.push(hasta);}
     if(metodo){w.push(`cp.metodo_pago_id=?`);a.push(metodo);}
     const wSQL=w.length?`WHERE ${w.join(' AND ')}`:'';
     const [rows]=await pool.query(`
