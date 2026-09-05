@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { hoyLima } from '../utils/fecha';
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
@@ -27,7 +28,7 @@ export default function Integracion() {
   // Formulario - Nueva venta con servicio
   const [formVenta, setFormVenta] = useState({
     tipo_servicio_id: '',
-    fecha_servicio: new Date().toISOString().split('T')[0],
+    fecha_servicio: hoyLima(),
     descripcion_servicio: '',
     estado_servicio: 'realizado',
     benefactor_id: '',
@@ -44,7 +45,7 @@ export default function Integracion() {
   // Formulario - Donación con servicio
   const [formDonacion, setFormDonacion] = useState({
     tipo_servicio_id: '',
-    fecha_servicio: new Date().toISOString().split('T')[0],
+    fecha_servicio: hoyLima(),
     estado_servicio: 'realizado',
     cajas_donadas: [],
     donante: '',
@@ -163,7 +164,7 @@ export default function Integracion() {
       setSuccess('Servicio y venta registrados exitosamente');
       setFormVenta({
         tipo_servicio_id: '',
-        fecha_servicio: new Date().toISOString().split('T')[0],
+        fecha_servicio: hoyLima(),
         descripcion_servicio: '',
         estado_servicio: 'realizado',
         benefactor_id: '',
@@ -210,7 +211,7 @@ export default function Integracion() {
       setSuccess('Servicio y donación registrados exitosamente');
       setFormDonacion({
         tipo_servicio_id: '',
-        fecha_servicio: new Date().toISOString().split('T')[0],
+        fecha_servicio: hoyLima(),
         estado_servicio: 'realizado',
         cajas_donadas: [],
         donante: '',

@@ -1,5 +1,6 @@
 // frontend/src/pages/Comprobantes.jsx
 import React, { useEffect, useState } from 'react';
+import { hoyLima } from '../utils/fecha';
 import axios from 'axios';
 import ExcelJS from 'exceljs';
 
@@ -197,7 +198,7 @@ const Comprobantes = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `comprobantes_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = `comprobantes_${hoyLima()}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();

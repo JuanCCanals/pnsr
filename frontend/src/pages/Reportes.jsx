@@ -1,26 +1,15 @@
 // frontend/src/pages/Reportes.jsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { hoyLima, aYMDLima } from '../utils/fecha';
 import * as XLSX from 'xlsx';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const hdr = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}` });
 const get = async (url) => { const r = await fetch(`${API}${url}`, { headers: hdr() }); return r.json(); };
-// Formatea SIEMPRE en hora de Lima, igual que el ticket impreso.
-// Antes se usaba toISOString(), que devuelve UTC: un cobro registrado a las 19:41
-// del 30/07 se mostraba como 31/07 (a partir de las 19:00 el dia ya cambio en UTC).
-// 'en-CA' es el locale que produce el formato YYYY-MM-DD.
-const LIMA_YMD = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/Lima', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-const toYMD = (v) => {
-  if (!v) return '';
-  // Las columnas DATE llegan como 'YYYY-MM-DD' sin hora: se usan tal cual, sin
-  // convertirlas a Date (eso volveria a introducir un desfase de zona horaria).
-  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-  const d = new Date(v);
-  if (isNaN(d)) return typeof v === 'string' ? v.slice(0, 10) : '';
-  return LIMA_YMD.format(d);
-};
+// Formatea SIEMPRE en hora de Lima, igual que el ticket impreso: con
+// toISOString() un cobro registrado a las 19:41 del 30/07 se mostraba como 31/07,
+// porque a partir de las 19:00 en UTC ya es el dia siguiente. Ver utils/fecha.js.
+const toYMD = aYMDLima;
 const fmtDate = (v) => { const s = toYMD(v); if (!s) return '—'; const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; };
 const fmtMoney = (v) => `S/ ${Number(v || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}`;
 
@@ -42,7 +31,7 @@ const exportXlsx = (rows, name) => {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Reporte');
-  XLSX.writeFile(wb, `${name}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  XLSX.writeFile(wb, `${name}_${hoyLima()}.xlsx`);
 };
 
 // ════════════════════════ Shared UI ════════════════════════

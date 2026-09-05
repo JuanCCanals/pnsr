@@ -1,5 +1,6 @@
 // /frontend/src/pages/Ventas.jsx
 import React, { useEffect, useState } from "react";
+import { hoyLima } from '../utils/fecha';
 import { useAuth } from "../contexts/AuthContext";
 import ExcelJS from "exceljs";
 import { ventasService, catalogosService } from "../services/api";
@@ -97,7 +98,7 @@ export default function Ventas() {
 
   // campos compartidos
   const [recibo, setRecibo] = useState("");
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(hoyLima());
   const [modalidadId, setModalidadId] = useState(null);
   const [monto, setMonto] = useState("40.00");
   const [puntoVentaId, setPuntoVentaId] = useState(null);
@@ -338,7 +339,7 @@ export default function Ventas() {
       }));
 
       await downloadExcel(
-        `ventas_filtrado_${new Date().toISOString().slice(0,10)}.xlsx`,
+        `ventas_filtrado_${hoyLima()}.xlsx`,
         rows
       );
     } catch (e) {
@@ -352,7 +353,7 @@ export default function Ventas() {
     setMsg({ type: "", text: "" });
     setPropagarEstado(false);
     setRecibo("");
-    setFecha(new Date().toISOString().slice(0, 10));
+    setFecha(hoyLima());
     setModalidadId(modalidades[0]?.id || null);
     setPuntoVentaId(puntos[0]?.id || null);
     setFormaPago("Efectivo");
@@ -403,7 +404,7 @@ export default function Ventas() {
     setMsg({ type: "", text: "" });
 
     setRecibo(r.recibo || "");
-    setFecha(toYMD(r.fecha) || new Date().toISOString().slice(0, 10));
+    setFecha(toYMD(r.fecha) || hoyLima());
     setModalidadId(r.modalidad_id || modalidades[0]?.id || null);
     setPuntoVentaId(r.punto_venta_id || puntos[0]?.id || null);
     setFormaPago(r.forma_pago || "Efectivo");

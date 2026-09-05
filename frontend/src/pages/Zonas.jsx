@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { hoyLima } from '../utils/fecha';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import ExcelJS from 'exceljs';
@@ -199,7 +200,7 @@ const Zonas = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `zonas_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = `zonas_${hoyLima()}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
       setSuccess('Excel exportado exitosamente');

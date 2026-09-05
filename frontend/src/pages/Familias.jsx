@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { hoyLima } from '../utils/fecha';
 import { useAuth } from "../contexts/AuthContext";
 import { familiasService, zonasService } from "../services/api";
 import ImportarFamilias from "./ImportarFamilias.jsx";
@@ -984,7 +985,7 @@ const Familias = () => {
       }
 
       const rows = allRows.map(mapFamiliaRow);
-      await downloadExcel(`familias_filtrado_${new Date().toISOString().slice(0,10)}.xlsx`, rows);
+      await downloadExcel(`familias_filtrado_${hoyLima()}.xlsx`, rows);
     } catch (e) {
       console.error(e);
       alert("No se pudo exportar el filtrado completo.");

@@ -5,6 +5,7 @@
  * Tabla: donaciones_fisicas
  */
 import React, { useEffect, useState } from 'react';
+import { hoyLima } from '../utils/fecha';
 import ExcelJS from 'exceljs';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -63,7 +64,7 @@ const DonacionesFisicas = () => {
     descripcion: '',
     cantidad: 1,
     unidad: 'unidades',
-    fecha_donacion: new Date().toISOString().slice(0, 10),
+    fecha_donacion: hoyLima(),
     destino: '',
     observaciones: '',
     estado: 'recibido',
@@ -186,7 +187,7 @@ const DonacionesFisicas = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `donaciones_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = `donaciones_${hoyLima()}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -212,7 +213,7 @@ const DonacionesFisicas = () => {
     setFormData({
       donante_nombre: '', donante_telefono: '', donante_dni: '',
       categoria: 'otros', descripcion: '', cantidad: 1, unidad: 'unidades',
-      fecha_donacion: new Date().toISOString().slice(0, 10),
+      fecha_donacion: hoyLima(),
       destino: '', observaciones: '', estado: 'recibido',
     });
     setEditingId(null);
