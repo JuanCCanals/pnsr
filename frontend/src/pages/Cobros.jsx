@@ -134,7 +134,11 @@ function avisarSesionExpirada() {
 async function httpGet(url) {
   const token = localStorage.getItem('token');
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 401 || res.status === 403) avisarSesionExpirada();
+  // SOLO 401. Un 403 significa "no tiene permiso para esto", no "se acabo la
+  // sesion": es una respuesta normal para un rol con permisos acotados, y
+  // tratarla como sesion vencida hacia aparecer el aviso rojo en una pantalla
+  // que estaba funcionando perfectamente.
+  if (res.status === 401) avisarSesionExpirada();
   return res.json();
 }
 
@@ -145,7 +149,11 @@ async function httpJSON(url, method, body) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body)
   });
-  if (res.status === 401 || res.status === 403) avisarSesionExpirada();
+  // SOLO 401. Un 403 significa "no tiene permiso para esto", no "se acabo la
+  // sesion": es una respuesta normal para un rol con permisos acotados, y
+  // tratarla como sesion vencida hacia aparecer el aviso rojo en una pantalla
+  // que estaba funcionando perfectamente.
+  if (res.status === 401) avisarSesionExpirada();
   return res.json();
 }
 
