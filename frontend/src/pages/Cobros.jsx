@@ -4,17 +4,29 @@ import { cobrosService, metodoPagoService, catalogosService, ventasService } fro
 import { consultarDocumento } from '../services/dniService';
 import { useAuth } from '../contexts/AuthContext';
 
-// Lee el vencimiento del JWT sin llamar al servidor. Se considera vencida tambien
-// la sesion a la que le queda menos de un minuto, para no empezar a guardar algo
-// que va a fallar a mitad de camino.
+// Lee el vencimiento del JWT sin llamar al servidor, para avisar antes de que
+// el operador llene un formulario que no va a poder guardar.
+//
+// FALLA ABIERTA a proposito: solo devuelve true cuando puede LEER una fecha de
+// vencimiento y esa fecha ya paso. Ante cualquier duda —token con formato
+// inesperado, reloj del equipo desajustado, error al decodificar— deja pasar y
+// que decida el servidor, que es la unica autoridad real.
+//
+// La version anterior hacia lo contrario: ante cualquier error daba la sesion
+// por vencida y bloqueaba el boton "Nuevo". Un solo tropiezo al decodificar
+// dejaba a la persona sin poder registrar, con la sesion perfectamente valida.
+// Bloquear a alguien por una sospecha del navegador es peor que dejarlo
+// intentar: si el token de verdad vencio, el servidor lo rechaza y el borrador
+// conserva lo escrito.
 function sesionVencida() {
   const t = localStorage.getItem('token');
-  if (!t) return true;
+  if (!t) return true;                    // sin token no hay nada que intentar
   try {
     const { exp } = JSON.parse(atob(t.split('.')[1]));
-    return !exp || exp * 1000 < Date.now() + 60000;
+    if (!exp) return false;               // no se puede afirmar que vencio
+    return exp * 1000 < Date.now();
   } catch {
-    return true;
+    return false;                         // ante la duda, dejar trabajar
   }
 }
 
