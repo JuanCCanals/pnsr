@@ -122,9 +122,19 @@ async function ensureCliente(nombre, dni = '', telefono = '', email = '') {
 
 
 
+// Estas dos funciones no pasan por el interceptor de axios, asi que un 401 les
+// llegaba como una respuesta cualquiera: devolvian el cuerpo del error, el
+// llamador no encontraba `success` y sencillamente no pintaba nada. La pantalla
+// quedaba con aspecto de estar funcionando mientras el servidor rechazaba TODAS
+// las peticiones, y el operador no tenia forma de enterarse. Ahora se avisa.
+function avisarSesionExpirada() {
+  window.dispatchEvent(new CustomEvent('sesion-expirada'));
+}
+
 async function httpGet(url) {
   const token = localStorage.getItem('token');
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 401 || res.status === 403) avisarSesionExpirada();
   return res.json();
 }
 
@@ -135,6 +145,7 @@ async function httpJSON(url, method, body) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body)
   });
+  if (res.status === 401 || res.status === 403) avisarSesionExpirada();
   return res.json();
 }
 
@@ -363,6 +374,25 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     { value: 'realizado',  label: 'Realizado',  color: 'bg-green-100 text-green-800' },
     { value: 'cancelado',  label: 'Cancelado',  color: 'bg-red-100 text-red-800' }
   ];
+
+  // La sesion dejo de ser valida. Antes esto no se mostraba en ninguna parte:
+  // el operador seguia viendo la pantalla como si nada y solo descubria el
+  // problema al intentar guardar, sin saber que debia volver a iniciar sesion.
+  const [sesionCaducada, setSesionCaducada] = useState(false);
+
+  useEffect(() => {
+    const alExpirar = () => setSesionCaducada(true);
+    window.addEventListener('sesion-expirada', alExpirar);
+    return () => window.removeEventListener('sesion-expirada', alExpirar);
+  }, []);
+
+  const volverAIniciarSesion = () => {
+    // Se borra el acceso guardado ANTES de ir al login. Si quedo uno vencido
+    // atascado en el navegador, seguiria enviandose y el problema se repetiria
+    // por mucho que la persona vuelva a escribir su contrasena.
+    try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch { /* almacenamiento bloqueado */ }
+    window.location.href = '/login';
+  };
 
   // Borrador pendiente de una sesion anterior (ver helpers al inicio del archivo)
   const [borrador, setBorrador] = useState(null);
@@ -1222,7 +1252,9 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       {canCreate && <button
         onClick={() => {
           if (sesionVencida()) {
-            setErrors({ general: 'Su sesión expiró. Vuelva a iniciar sesión antes de registrar un servicio.' });
+            // Antes esto solo mostraba un texto y dejaba a la persona sin salida:
+            // le pedia iniciar sesion pero no habia como hacerlo desde ahi.
+            setSesionCaducada(true);
             return;
           }
           resetForm(); setShowModal(true);
@@ -1232,6 +1264,20 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
         Nuevo
       </button>}
 
+
+      {/* La sesion termino: hay que decirlo claro y dar la salida en el mismo aviso */}
+      {sesionCaducada && (
+        <div className="mb-4 p-4 bg-red-50 border-2 border-red-400 rounded flex flex-wrap items-center gap-3">
+          <span className="text-red-800 text-sm flex-1 min-w-[18rem]">
+            <strong>Su sesión terminó.</strong> Lo que ve en pantalla puede estar desactualizado
+            y no se podrá guardar nada hasta que vuelva a iniciar sesión.
+          </span>
+          <button onClick={volverAIniciarSesion}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 font-medium">
+            Volver a iniciar sesión
+          </button>
+        </div>
+      )}
 
       {/* Quedo informacion a medio escribir de una sesion anterior */}
       {borrador && !showModal && (
