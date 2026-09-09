@@ -1272,12 +1272,12 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       {/* Si la sesion ya vencio, se avisa ANTES de que el operador llene nada. */}
       {canCreate && <button
         onClick={() => {
-          if (sesionVencida()) {
-            // Antes esto solo mostraba un texto y dejaba a la persona sin salida:
-            // le pedia iniciar sesion pero no habia como hacerlo desde ahi.
-            setSesionCaducada(true);
-            return;
-          }
+          // La comprobacion AVISA pero ya NO bloquea. Bloquear aqui, basandose
+          // en lo que el navegador dice tener guardado, dejo dos veces a una
+          // operadora sin poder registrar teniendo la sesion perfectamente
+          // valida. La autoridad sobre la sesion es el servidor: si de verdad
+          // vencio, el guardado devolvera 401 y se avisara entonces.
+          if (sesionVencida()) setSesionCaducada(true);
           resetForm(); setShowModal(true);
         }}
         className="mb-6 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 font-medium"
