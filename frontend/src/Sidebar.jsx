@@ -44,8 +44,12 @@ export default function Sidebar() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
-    const stored = localStorage.getItem('theme');
-    return stored ? stored === 'dark' : false;
+    // Protegido: con los datos del sitio bloqueados, localStorage lanza error y
+    // tumbaba el menu lateral entero por una simple preferencia de color.
+    try {
+      const stored = localStorage.getItem('theme');
+      return stored ? stored === 'dark' : false;
+    } catch { return false; }
   });
 
   const navigate = useNavigate();
@@ -70,7 +74,7 @@ export default function Sidebar() {
   const toggleTheme = () => {
     const next = !darkMode;
     setDarkMode(next);
-    localStorage.setItem('theme', next ? 'dark' : 'light');
+    try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* no se recordara */ }
   };
 
   // Obtener nombre del rol para mostrar

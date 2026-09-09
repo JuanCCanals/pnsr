@@ -21,7 +21,13 @@ const Login = () => {
   // interceptor de axios recarga la página (se pierde el state de React Router),
   // así que la ruta previa queda en sessionStorage para no dejar al usuario
   // siempre en el Dashboard.
-  const from = location.state?.from?.pathname || sessionStorage.getItem('rutaPrevia') || '/dashboard';
+  // El acceso al almacenamiento va protegido: si el navegador tiene bloqueados
+  // los datos de este sitio, sessionStorage LANZA error, y al hacerlo aqui —en
+  // pleno render— la pantalla de login se quedaba completamente en blanco. Una
+  // comodidad (recordar donde estaba) nunca debe impedir iniciar sesion.
+  let rutaPrevia = null;
+  try { rutaPrevia = sessionStorage.getItem('rutaPrevia'); } catch { /* almacenamiento bloqueado */ }
+  const from = location.state?.from?.pathname || rutaPrevia || '/dashboard';
 
   const handleChange = (e) => {
     const { name, value } = e.target;
