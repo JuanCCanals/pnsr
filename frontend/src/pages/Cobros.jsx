@@ -5,32 +5,6 @@ import { cobrosService, metodoPagoService, catalogosService, ventasService } fro
 import { consultarDocumento } from '../services/dniService';
 import { useAuth } from '../contexts/AuthContext';
 
-// Lee el vencimiento del JWT sin llamar al servidor, para avisar antes de que
-// el operador llene un formulario que no va a poder guardar.
-//
-// FALLA ABIERTA a proposito: solo devuelve true cuando puede LEER una fecha de
-// vencimiento y esa fecha ya paso. Ante cualquier duda —token con formato
-// inesperado, reloj del equipo desajustado, error al decodificar— deja pasar y
-// que decida el servidor, que es la unica autoridad real.
-//
-// La version anterior hacia lo contrario: ante cualquier error daba la sesion
-// por vencida y bloqueaba el boton "Nuevo". Un solo tropiezo al decodificar
-// dejaba a la persona sin poder registrar, con la sesion perfectamente valida.
-// Bloquear a alguien por una sospecha del navegador es peor que dejarlo
-// intentar: si el token de verdad vencio, el servidor lo rechaza y el borrador
-// conserva lo escrito.
-function sesionVencida() {
-  const t = leerToken();
-  if (!t) return true;                    // sin token no hay nada que intentar
-  try {
-    const { exp } = JSON.parse(atob(t.split('.')[1]));
-    if (!exp) return false;               // no se puede afirmar que vencio
-    return exp * 1000 < Date.now();
-  } catch {
-    return false;                         // ante la duda, dejar trabajar
-  }
-}
-
 // ========== BORRADOR DEL FORMULARIO ==========
 // Cuando la pagina se recarga a media carga de datos —sesion vencida, F5 sin
 // querer, corte de energia— se perdia todo lo escrito y habia que reingresarlo.
@@ -140,18 +114,31 @@ async function ensureCliente(nombre, dni = '', telefono = '', email = '') {
 // llamador no encontraba `success` y sencillamente no pintaba nada. La pantalla
 // quedaba con aspecto de estar funcionando mientras el servidor rechazaba TODAS
 // las peticiones, y el operador no tenia forma de enterarse. Ahora se avisa.
+// El aviso de sesion lo decide UNICAMENTE el servidor, y se retira solo en
+// cuanto una peticion vuelve a funcionar.
+//
+// Antes lo disparaban tambien conjeturas del navegador —el token que parecia
+// vencido, un 403 de permisos— y se equivocaron una y otra vez: aparecia el
+// cartel rojo en pantallas que funcionaban bien, y no se iba hasta recargar.
+// Un aviso que miente es peor que no tener aviso.
 function avisarSesionExpirada() {
   window.dispatchEvent(new CustomEvent('sesion-expirada'));
+}
+function avisarSesionOk() {
+  window.dispatchEvent(new CustomEvent('sesion-ok'));
+}
+
+// SOLO 401. Un 403 es "no tiene permiso para esto", que para un rol acotado es
+// una respuesta normal y esperada.
+function revisarRespuesta(res) {
+  if (res.status === 401) avisarSesionExpirada();
+  else if (res.ok) avisarSesionOk();
 }
 
 async function httpGet(url) {
   const token = leerToken();
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  // SOLO 401. Un 403 significa "no tiene permiso para esto", no "se acabo la
-  // sesion": es una respuesta normal para un rol con permisos acotados, y
-  // tratarla como sesion vencida hacia aparecer el aviso rojo en una pantalla
-  // que estaba funcionando perfectamente.
-  if (res.status === 401) avisarSesionExpirada();
+  revisarRespuesta(res);
   return res.json();
 }
 
@@ -162,11 +149,7 @@ async function httpJSON(url, method, body) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body)
   });
-  // SOLO 401. Un 403 significa "no tiene permiso para esto", no "se acabo la
-  // sesion": es una respuesta normal para un rol con permisos acotados, y
-  // tratarla como sesion vencida hacia aparecer el aviso rojo en una pantalla
-  // que estaba funcionando perfectamente.
-  if (res.status === 401) avisarSesionExpirada();
+  revisarRespuesta(res);
   return res.json();
 }
 
@@ -403,8 +386,13 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   useEffect(() => {
     const alExpirar = () => setSesionCaducada(true);
+    const alFuncionar = () => setSesionCaducada(false);   // se retira solo
     window.addEventListener('sesion-expirada', alExpirar);
-    return () => window.removeEventListener('sesion-expirada', alExpirar);
+    window.addEventListener('sesion-ok', alFuncionar);
+    return () => {
+      window.removeEventListener('sesion-expirada', alExpirar);
+      window.removeEventListener('sesion-ok', alFuncionar);
+    };
   }, []);
 
   const volverAIniciarSesion = () => {
@@ -695,12 +683,12 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     // operador creia que no se habia guardado y lo reingresaba todo: duplicado.
     if (guardandoRef.current) return;
 
-    // La sesion dura 24 h. Si vencio mientras el formulario estaba abierto, el
-    // primer POST devolvia 401 y el interceptor recargaba la pagina, perdiendo
-    // todo lo escrito. Ahora se detecta ANTES de enviar y los datos se conservan.
-    if (sesionVencida()) {
-      return setErrors({ general: 'Su sesión expiró. No cierre esta ventana: inicie sesión en otra pestaña del navegador y vuelva a presionar Crear. Los datos que ingresó se conservan.' });
-    }
+    // Aqui habia una comprobacion de sesion que impedia guardar cuando el
+    // navegador PARECIA tener el acceso vencido. Se equivoco repetidamente y
+    // dejo a una operadora sin poder registrar teniendo la sesion valida, que
+    // es mucho peor que el problema que intentaba evitar. Quien decide si la
+    // sesion sirve es el servidor: si responde 401, el manejador de errores de
+    // mas abajo lo dice con claridad.
 
     guardandoRef.current = true;
     setGuardando(true);
@@ -1272,12 +1260,8 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
       {/* Si la sesion ya vencio, se avisa ANTES de que el operador llene nada. */}
       {canCreate && <button
         onClick={() => {
-          // La comprobacion AVISA pero ya NO bloquea. Bloquear aqui, basandose
-          // en lo que el navegador dice tener guardado, dejo dos veces a una
-          // operadora sin poder registrar teniendo la sesion perfectamente
-          // valida. La autoridad sobre la sesion es el servidor: si de verdad
-          // vencio, el guardado devolvera 401 y se avisara entonces.
-          if (sesionVencida()) setSesionCaducada(true);
+          // Sin conjeturas sobre la sesion: se abre el formulario y punto. Si el
+          // acceso hubiera caducado de verdad, el servidor lo dira al guardar.
           resetForm(); setShowModal(true);
         }}
         className="mb-6 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 font-medium"
