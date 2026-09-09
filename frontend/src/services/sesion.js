@@ -24,6 +24,15 @@ let tokenEnMemoria = null;
 let usuarioEnMemoria = null;
 let respaldoConfiable = true;   // false = el navegador no esta guardando
 
+// Una vez que la sesion se da por terminada, NO se vuelve a leer del navegador.
+//
+// Sin esto se producia un circulo vicioso en el equipo averiado: al rechazar el
+// servidor, borrarSesion() vaciaba la memoria e intentaba borrar del navegador,
+// pero ese borrado fallaba en silencio. La siguiente lectura, al no encontrar
+// nada en memoria, caia de nuevo al navegador y RESUCITABA el token caducado.
+// Asi, peticion tras peticion, se seguia enviando eternamente un token muerto.
+let sesionInvalidada = false;
+
 /** Escribe en el navegador y comprueba releyendo. Devuelve si quedo guardado. */
 function escribirConVerificacion(clave, valor) {
   try {
@@ -36,6 +45,7 @@ function escribirConVerificacion(clave, valor) {
 
 export function guardarToken(token) {
   tokenEnMemoria = token || null;
+  if (token) sesionInvalidada = false;   // hay sesion nueva y valida
   if (!token) return true;
   const ok = escribirConVerificacion('token', token);
   if (!ok) respaldoConfiable = false;
@@ -53,17 +63,20 @@ export function guardarUsuario(usuario) {
 /** La memoria manda; el navegador solo se consulta al arrancar la pagina. */
 export function leerToken() {
   if (tokenEnMemoria) return tokenEnMemoria;
+  if (sesionInvalidada) return null;   // no resucitar lo que ya se descarto
   try { return localStorage.getItem('token'); } catch { return null; }
 }
 
 export function leerUsuario() {
   if (usuarioEnMemoria) return usuarioEnMemoria;
+  if (sesionInvalidada) return null;
   try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
 }
 
 export function borrarSesion() {
   tokenEnMemoria = null;
   usuarioEnMemoria = null;
+  sesionInvalidada = true;   // aunque el navegador no lo borre, aqui ya no existe
   try {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
