@@ -61,10 +61,32 @@ export function guardarUsuario(usuario) {
 }
 
 /** La memoria manda; el navegador solo se consulta al arrancar la pagina. */
+/**
+ * Un token guardado solo sirve si aun no ha vencido.
+ *
+ * En el equipo averiado quedo atascado en el navegador un token de dias atras
+ * que no se puede borrar. Cada recarga de pagina reiniciaba la marca de sesion
+ * invalidada, se volvia a leer ese token muerto y se enviaba otra vez, una y
+ * otra vez, incluso al intentar guardar. Descartarlo aqui corta el ciclo: el
+ * navegador puede conservar basura, pero nosotros no la usamos.
+ *
+ * Si no se puede interpretar, se deja pasar y decide el servidor.
+ */
+function tokenVigente(t) {
+  try {
+    const { exp } = JSON.parse(atob(t.split('.')[1]));
+    return !exp || exp * 1000 > Date.now();
+  } catch { return true; }
+}
+
 export function leerToken() {
   if (tokenEnMemoria) return tokenEnMemoria;
   if (sesionInvalidada) return null;   // no resucitar lo que ya se descarto
-  try { return localStorage.getItem('token'); } catch { return null; }
+  try {
+    const t = localStorage.getItem('token');
+    if (t && !tokenVigente(t)) { sesionInvalidada = true; return null; }
+    return t;
+  } catch { return null; }
 }
 
 export function leerUsuario() {
