@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { leerToken } from '../services/sesion';
 import { hoyLima } from '../utils/fecha';
 import { useAuth } from "../contexts/AuthContext";
 import { familiasService, zonasService } from "../services/api";
@@ -512,7 +513,7 @@ const Familias = () => {
   const fetchCajas = async (goToPage = 1) => {
     setCajasLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const params = new URLSearchParams({
         page: goToPage,
         limit: 20,

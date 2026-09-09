@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { leerToken } from '../services/sesion';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -45,7 +46,7 @@ const Excedentes = () => {
       setLoading(true);
       setError(null);
 
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const params = {};
@@ -120,7 +121,7 @@ const Excedentes = () => {
       setError(null);
       setSuccess(null);
 
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       await axios.delete(`${API_URL}/excedentes/${item.id}`, { headers });
@@ -148,7 +149,7 @@ const Excedentes = () => {
         return;
       }
 
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const payload = {

@@ -1,0 +1,80 @@
+// frontend/src/services/sesion.js
+//
+// Custodia del acceso (token) y del usuario de la sesion.
+//
+// POR QUE EXISTE ESTE ARCHIVO
+// Hasta ahora cada pantalla leia el token con localStorage.getItem('token') y el
+// login lo guardaba con setItem, dando por hecho que el navegador siempre puede
+// guardar. En una de las maquinas de la parroquia resulto que NO: ese perfil de
+// Chrome podia leer lo ya guardado pero no escribir ni borrar. Consecuencia: por
+// mucho que la operadora volviera a iniciar sesion, el navegador seguia
+// entregando un token caducado de dias atras, el servidor lo rechazaba todo y
+// era imposible trabajar. Se perdio un dia entero en diagnosticarlo, y la
+// "solucion" pasaba por reparar su navegador.
+//
+// COMO LO RESUELVE
+// La fuente de verdad durante la sesion es la MEMORIA. El navegador es solo un
+// respaldo para sobrevivir a una recarga de pagina. Si el respaldo falla, la
+// persona puede trabajar igual: solo perdera la sesion si recarga.
+//
+// Ademas se verifica la escritura releyendo lo guardado, para poder AVISAR con
+// claridad en lugar de fallar de forma silenciosa.
+
+let tokenEnMemoria = null;
+let usuarioEnMemoria = null;
+let respaldoConfiable = true;   // false = el navegador no esta guardando
+
+/** Escribe en el navegador y comprueba releyendo. Devuelve si quedo guardado. */
+function escribirConVerificacion(clave, valor) {
+  try {
+    localStorage.setItem(clave, valor);
+    return localStorage.getItem(clave) === valor;
+  } catch {
+    return false;   // modo privado, almacenamiento lleno o perfil danado
+  }
+}
+
+export function guardarToken(token) {
+  tokenEnMemoria = token || null;
+  if (!token) return true;
+  const ok = escribirConVerificacion('token', token);
+  if (!ok) respaldoConfiable = false;
+  return ok;
+}
+
+export function guardarUsuario(usuario) {
+  usuarioEnMemoria = usuario || null;
+  if (!usuario) return true;
+  const ok = escribirConVerificacion('user', JSON.stringify(usuario));
+  if (!ok) respaldoConfiable = false;
+  return ok;
+}
+
+/** La memoria manda; el navegador solo se consulta al arrancar la pagina. */
+export function leerToken() {
+  if (tokenEnMemoria) return tokenEnMemoria;
+  try { return localStorage.getItem('token'); } catch { return null; }
+}
+
+export function leerUsuario() {
+  if (usuarioEnMemoria) return usuarioEnMemoria;
+  try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+}
+
+export function borrarSesion() {
+  tokenEnMemoria = null;
+  usuarioEnMemoria = null;
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  } catch { /* si no se puede borrar, la memoria ya quedo limpia */ }
+}
+
+/**
+ * false cuando el navegador NO esta conservando la sesion. Se puede trabajar
+ * igual, pero al recargar la pagina habra que iniciar sesion de nuevo, y
+ * conviene decirselo a la persona en lugar de dejar que lo descubra sola.
+ */
+export function respaldoDelNavegadorFunciona() {
+  return respaldoConfiable;
+}

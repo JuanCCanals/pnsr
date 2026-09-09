@@ -43,7 +43,7 @@ async function consultarDNI_APISPeru(dni) {
  * Llama a: GET /api/cobros/consultar-dni/{dni}?proveedor=apisnetpe
  */
 async function consultarDNI_ApisNetPe(dni) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const response = await fetch(`${API_BASE_URL}/cobros/consultar-dni/${dni}?proveedor=apisnetpe`, {
     headers: {
       'Authorization': `Bearer ${token}`
@@ -115,7 +115,7 @@ async function consultarRUC_APISPeru(ruc) {
  * Consultar RUC via proxy backend (apis.net.pe)
  */
 async function consultarRUC_ApisNetPe(ruc) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const response = await fetch(`${API_BASE_URL}/cobros/consultar-ruc/${ruc}`, {
     headers: { 'Authorization': `Bearer ${token}` }
   });

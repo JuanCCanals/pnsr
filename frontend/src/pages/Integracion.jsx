@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { leerToken } from '../services/sesion';
 import { hoyLima } from '../utils/fecha';
 import axios from 'axios';
 
@@ -62,7 +63,7 @@ export default function Integracion() {
   const cargarDatos = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const [tiposRes, benefRes, pvRes, cajasRes, resumenRes, serviciosRes] = await Promise.all([
@@ -131,7 +132,7 @@ export default function Integracion() {
     e.preventDefault();
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const payload = {
@@ -189,7 +190,7 @@ export default function Integracion() {
     e.preventDefault();
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const payload = {

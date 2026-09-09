@@ -1,10 +1,11 @@
 // frontend/src/pages/Reportes.jsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { leerToken } from '../services/sesion';
 import { hoyLima, aYMDLima } from '../utils/fecha';
 import * as XLSX from 'xlsx';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
-const hdr = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}` });
+const hdr = () => ({ Authorization: `Bearer ${leerToken()}` });
 const get = async (url) => { const r = await fetch(`${API}${url}`, { headers: hdr() }); return r.json(); };
 // Formatea SIEMPRE en hora de Lima, igual que el ticket impreso: con
 // toISOString() un cobro registrado a las 19:41 del 30/07 se mostraba como 31/07,

@@ -1,3 +1,4 @@
+import { leerToken, leerUsuario, guardarToken, guardarUsuario, borrarSesion } from '../services/sesion';
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { authService } from '../services/api';
 
@@ -110,8 +111,8 @@ export const AuthProvider = ({ children }) => {
   // Verificar autenticación al cargar la aplicación
   useEffect(() => {
     const verifyAuth = async () => {
-      const token = localStorage.getItem('token');
-      const user = localStorage.getItem('user');
+      const token = leerToken();
+      const user = leerUsuario();
 
       if (token && user) {
         try {
@@ -126,8 +127,7 @@ export const AuthProvider = ({ children }) => {
           });
         } catch (error) {
           console.error('Error al verificar autenticación:', error);
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
+          borrarSesion();
           dispatch({
             type: AUTH_ACTIONS.VERIFY_FAILURE,
             payload: { error: 'Sesión expirada' },
@@ -151,9 +151,12 @@ export const AuthProvider = ({ children }) => {
 
       const response = await authService.login(email, password);
 
-      // Guardar en localStorage
-      localStorage.setItem('token', response.token);
-      localStorage.setItem('user', JSON.stringify(response.user));
+      // El token queda en memoria y, si el navegador lo permite, tambien
+      // guardado para sobrevivir a una recarga. Si la escritura falla —perfil
+      // de Chrome danado, modo privado— se puede trabajar igual: antes, en
+      // cambio, se seguia usando en silencio un token caducado para siempre.
+      guardarToken(response.token);
+      guardarUsuario(response.user);
 
       dispatch({
         type: AUTH_ACTIONS.LOGIN_SUCCESS,
@@ -183,8 +186,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('Error al cerrar sesión:', error);
     } finally {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      borrarSesion();
       dispatch({ type: AUTH_ACTIONS.LOGOUT });
     }
   };
@@ -194,8 +196,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await authService.updateProfile(userData);
       
-      // Actualizar localStorage
-      localStorage.setItem('user', JSON.stringify(response.user));
+      guardarUsuario(response.user);
       
       dispatch({
         type: AUTH_ACTIONS.UPDATE_PROFILE,

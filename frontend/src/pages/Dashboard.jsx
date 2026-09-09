@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { leerToken } from '../services/sesion';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -108,7 +109,7 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       // Intentar cargar ambos dashboards

@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { leerToken } from '../services/sesion';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -49,7 +50,7 @@ export default function Usuarios() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const [usersRes, rolesRes] = await Promise.all([
@@ -111,7 +112,7 @@ export default function Usuarios() {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       if (!formData.nombre.trim()) {
@@ -174,7 +175,7 @@ export default function Usuarios() {
   const handleToggleStatus = async (usuario) => {
     if (!canUpdate) return; // Doble protección
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
       await axios.patch(`${API_URL}/usuarios/${usuario.id}/toggle-status`, {}, { headers });
       setSuccess(`Usuario ${usuario.activo ? 'desactivado' : 'activado'} exitosamente`);
@@ -189,7 +190,7 @@ export default function Usuarios() {
     if (!canDelete) return; // Doble protección
     if (window.confirm(`¿Estás seguro de eliminar a ${usuario.nombre}? Esta acción no se puede deshacer.`)) {
       try {
-        const token = localStorage.getItem('token');
+        const token = leerToken();
         const headers = { Authorization: `Bearer ${token}` };
         await axios.delete(`${API_URL}/usuarios/${usuario.id}`, { headers });
         setSuccess('Usuario eliminado exitosamente');

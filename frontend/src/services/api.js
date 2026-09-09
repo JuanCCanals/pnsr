@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { leerToken, guardarToken, borrarSesion } from './sesion';
 
 // Ajustamos el baseURL para incluir /api de forma global
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
@@ -11,7 +12,7 @@ const api = axios.create({
 // Interceptor para agregar token de autenticación y manejar Content-Type
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = leerToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -33,13 +34,12 @@ api.interceptors.response.use(
     // middlewares/auth.js). Guardarlo aqui evita que la sesion venza de golpe
     // mientras el operador tiene un formulario a medio llenar.
     const renovado = response.headers?.['x-token-renovado'];
-    if (renovado) localStorage.setItem('token', renovado);
+    if (renovado) guardarToken(renovado);
     return response;
   },
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      borrarSesion();
       // Se recuerda donde estaba para volver ahi despues de iniciar sesion:
       // window.location recarga la pagina y se pierde el state de React Router.
       try { sessionStorage.setItem('rutaPrevia', window.location.pathname); } catch { /* modo privado */ }
@@ -57,7 +57,10 @@ export const authService = {
   getProfile:()               => api.get('/auth/profile').then(r => r.data),
   updateProfile:(data)        => api.put('/auth/profile', data).then(r => r.data),
   changePassword:(data)       => api.post('/auth/change-password', data).then(r => r.data),
-  logout:   ()                => api.post('/auth/logout').then(r => {localStorage.removeItem('token'); localStorage.removeItem('user'); return r.data;}),
+  // La limpieza va PRIMERO y pase lo que pase. La ruta /auth/logout no existe en
+  // el backend, asi que esta llamada siempre falla; antes eso dejaba la sesion
+  // sin limpiar cuando el token todavia era valido.
+  logout:   async ()          => { borrarSesion(); try { await api.post('/auth/logout'); } catch { /* la ruta no existe */ } return { success: true }; },
 };
 
 // Servicios de usuarios

@@ -1,5 +1,6 @@
 // frontend/src/pages/Comprobantes.jsx
 import React, { useEffect, useState } from 'react';
+import { leerToken } from '../services/sesion';
 import { hoyLima } from '../utils/fecha';
 import axios from 'axios';
 import ExcelJS from 'exceljs';
@@ -27,7 +28,7 @@ const Comprobantes = () => {
     try {
       setLoading(true);
       setError(null);
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const headers = { Authorization: `Bearer ${token}` };
 
       const res = await axios.get(`${API_URL}/comprobantes`, {
@@ -92,7 +93,7 @@ const Comprobantes = () => {
     setPrinting(true);
 
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const cobroId = ticket.cobro_id;
 
       // Endpoint diferente según tipo

@@ -1,5 +1,6 @@
 // frontend/src/pages/Cobros.jsx
 import React, { useState, useEffect, useRef } from 'react';
+import { leerToken, leerUsuario, borrarSesion } from '../services/sesion';
 import { cobrosService, metodoPagoService, catalogosService, ventasService } from '../services/api';
 import { consultarDocumento } from '../services/dniService';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,7 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 // intentar: si el token de verdad vencio, el servidor lo rechaza y el borrador
 // conserva lo escrito.
 function sesionVencida() {
-  const t = localStorage.getItem('token');
+  const t = leerToken();
   if (!t) return true;                    // sin token no hay nada que intentar
   try {
     const { exp } = JSON.parse(atob(t.split('.')[1]));
@@ -42,7 +43,7 @@ const BORRADOR_VIGENCIA_MS = 24 * 60 * 60 * 1000;
 
 function claveBorrador() {
   let id = 'anon';
-  try { id = JSON.parse(localStorage.getItem('user') || '{}')?.id ?? 'anon'; } catch { /* sin sesion */ }
+  id = leerUsuario()?.id ?? 'anon';
   return `borrador_servicio_${id}`;   // por usuario: la PC es compartida
 }
 
@@ -144,7 +145,7 @@ function avisarSesionExpirada() {
 }
 
 async function httpGet(url) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   // SOLO 401. Un 403 significa "no tiene permiso para esto", no "se acabo la
   // sesion": es una respuesta normal para un rol con permisos acotados, y
@@ -155,7 +156,7 @@ async function httpGet(url) {
 }
 
 async function httpJSON(url, method, body) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -187,7 +188,7 @@ async function actualizarServicio(id, cambios) {
 }
 
 async function eliminarServicio(id) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(`/api/servicios/${id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` }
@@ -410,7 +411,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     // Se borra el acceso guardado ANTES de ir al login. Si quedo uno vencido
     // atascado en el navegador, seguiria enviandose y el problema se repetiria
     // por mucho que la persona vuelva a escribir su contrasena.
-    try { localStorage.removeItem('token'); localStorage.removeItem('user'); } catch { /* almacenamiento bloqueado */ }
+    borrarSesion();
     window.location.href = '/login';
   };
 
@@ -605,7 +606,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     setBuscandoDNI(true);
     try {
       // 1) BD local
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
       const localRes = await fetch(`${apiBase}/clientes/by-dni/${doc}`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -753,7 +754,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
       if (!validarPagos()) return;
 
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       if (!token) {
         return setErrors({ general: 'Sesión expirada. Por favor, inicie sesión nuevamente.' });
       }
@@ -1010,7 +1011,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
 
   const abrirTicketPDF = async (cobroId) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       if (!token) {
         setErrors({ general: 'Sesión expirada. Por favor, inicie sesión nuevamente.' });
         return;
@@ -1174,7 +1175,7 @@ const [buscandoCaja, setBuscandoCaja] = useState(false);
     }
     if (!confirm('¿Confirmas la anulación de este servicio? El historial se conserva pero el monto deja de contar en KPIs e informes.')) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
       const res = await fetch(`${apiBase}/servicios/${id}/anular`, {
         method: 'POST',

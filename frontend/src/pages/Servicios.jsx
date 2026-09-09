@@ -1,15 +1,16 @@
 // /src/pages/Servicios.jsx
 import React, { useEffect, useState } from 'react';
+import { leerToken } from '../services/sesion';
 import { useAuth } from '../contexts/AuthContext';
 
 /* ============== Helpers HTTP (fetch + JWT) ============== */
 async function httpGet(url) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   return res.json();
 }
 async function httpJSON(url, method, body) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -23,7 +24,7 @@ async function listarTipos() { return httpGet('/api/tipos-servicio'); }
 async function crearTipo(data) { return httpJSON('/api/tipos-servicio', 'POST', data); }
 async function actualizarTipo(id, data) { return httpJSON(`/api/tipos-servicio/${id}`, 'PUT', data); }
 async function eliminarTipo(id) {
-  const token = localStorage.getItem('token');
+  const token = leerToken();
   const res = await fetch(`/api/tipos-servicio/${id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` }

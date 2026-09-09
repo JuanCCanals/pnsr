@@ -1,5 +1,6 @@
 // /frontend/src/pages/Ventas.jsx
 import React, { useEffect, useState } from "react";
+import { leerToken } from '../services/sesion';
 import { hoyLima } from '../utils/fecha';
 import { useAuth } from "../contexts/AuthContext";
 import ExcelJS from "exceljs";
@@ -21,7 +22,7 @@ const mapEstadoDB = (dbVal) => {
 if (ventasService) {
   if (!ventasService.getCajasVenta) {
     ventasService.getCajasVenta = async (ventaId) => {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const res = await fetch(`/api/ventas/${ventaId}/cajas`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -30,7 +31,7 @@ if (ventasService) {
   }
   if (!ventasService.actualizarEstadoCaja) {
     ventasService.actualizarEstadoCaja = async (cajaId, estado) => {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       const res = await fetch(`/api/ventas/cajas/${cajaId}/estado`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -376,7 +377,7 @@ export default function Ventas() {
   // Abrir ticket PDF de una venta (descarga blob con auth y abre en nueva pestaña)
   const imprimirTicket = async (ventaId) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = leerToken();
       if (!token) {
         setMsg({ type: 'error', text: 'Sesión expirada. Inicia sesión nuevamente.' });
         return;

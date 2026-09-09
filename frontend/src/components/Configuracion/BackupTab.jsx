@@ -1,5 +1,6 @@
 // frontend/src/components/Configuracion/BackupTab.jsx
 import React, { useState, useEffect, useCallback } from 'react';
+import { leerToken } from '../../services/sesion';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
@@ -35,7 +36,7 @@ const BackupTab = () => {
   const [purging, setPurging] = useState(false);
   const [purgeResult, setPurgeResult] = useState(null);
 
-  const token = localStorage.getItem('token');
+  const token = leerToken();
 
   const headers = {
     'Content-Type': 'application/json',
