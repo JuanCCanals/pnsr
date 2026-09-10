@@ -49,6 +49,18 @@ module.exports = function authenticateToken(req, res, next) {
       const quien = p?.email || 'desconocido';
       const donde = `${req.method} ${req.originalUrl}`;
 
+      // Identificacion del origen. Se llego a un punto en que una sola ruta
+      // enviaba un token caducado mientras el resto de la aplicacion usaba uno
+      // valido, y no habia forma de saber DESDE DONDE salia esa peticion sin
+      // pedirle al cliente que abriera las herramientas del navegador. Con esto
+      // el servidor lo dice solo: que navegador, desde que pagina, y los
+      // primeros caracteres del token para poder distinguir uno de otro sin
+      // exponerlo entero.
+      const navegador = String(req.headers['user-agent'] || '')
+        .replace(/^Mozilla\/[\d.]+ /, '').slice(0, 90) || 'desconocido';
+      const desdePagina = req.headers.referer || 'sin referer';
+      const huella = token.slice(-12);   // cola del token: identifica sin exponer
+
       if (err.name === 'TokenExpiredError') {
         // Se vuelca la vida completa del token. Sin estos datos no se puede
         // distinguir "caduco a las 24 h, es lo esperado" de "caduco antes de
@@ -60,11 +72,12 @@ module.exports = function authenticateToken(req, res, next) {
         console.warn(
           `[SESION] ${hora()} | Token vencido | usuario=${quien} | ${donde} | ip=${req.ip}` +
           ` | emitido=${p?.iat ? hora(p.iat) : '?'} | vencia=${p?.exp ? hora(p.exp) : '?'}` +
-          ` | vida=${vidaHoras}h | vencido_hace=${vencidoHaceMin}min | renovaciones=${p?.ren ?? 0}`
+          ` | vida=${vidaHoras}h | vencido_hace=${vencidoHaceMin}min | renovaciones=${p?.ren ?? 0}` +
+          ` | huella=...${huella} | navegador=${navegador} | desde=${desdePagina}`
         );
         return res.status(401).json({ message: 'Sesión expirada' });
       }
-      console.warn(`[SESION] ${hora()} | Token invalido (${err.name}) | usuario=${quien} | ${donde} | ip=${req.ip}`);
+      console.warn(`[SESION] ${hora()} | Token invalido (${err.name}) | usuario=${quien} | ${donde} | ip=${req.ip} | navegador=${navegador} | desde=${desdePagina}`);
       return res.status(403).json({ message: 'Token inválido' });
     }
 
