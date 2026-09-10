@@ -80,7 +80,18 @@ function tokenVigente(t) {
 }
 
 export function leerToken() {
-  if (tokenEnMemoria) return tokenEnMemoria;
+  // El token de MEMORIA tambien caduca. Faltaba comprobarlo, y ese descuido
+  // costo una manana entera: una ventana abierta desde el dia anterior conserva
+  // su token en memoria y lo seguia enviando indefinidamente. Como la memoria
+  // tiene prioridad, ni borrar el almacenamiento ni recargar OTRA ventana
+  // cambiaban nada; solo cerrar esa ventana concreta. Desde fuera parecia que la
+  // aplicacion ignoraba todo lo que haciamos.
+  if (tokenEnMemoria) {
+    if (tokenVigente(tokenEnMemoria)) return tokenEnMemoria;
+    tokenEnMemoria = null;
+    sesionInvalidada = true;
+    return null;
+  }
   if (sesionInvalidada) return null;   // no resucitar lo que ya se descarto
   try {
     const t = localStorage.getItem('token');
