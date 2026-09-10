@@ -29,6 +29,29 @@ if (DEMO) console.warn('⚠️ DEMO_MODE ENABLED: auth bypassed for demo purpose
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ── Las respuestas de la API NUNCA se guardan en la cache del navegador ──
+//
+// Express emite ETag por defecto y, al no haber Cache-Control, el navegador
+// revalidaba y recibia 304. Ante un 304 el navegador CONSERVA las cabeceras que
+// el 304 no trae, de modo que una cabecera X-Token-Renovado emitida dias antes
+// quedaba grabada en la entrada de cache de un GET de catalogo y se reinyectaba
+// en cada carga de la pantalla, pisando el token recien obtenido con uno ya
+// caducado. El operador iniciaba sesion, la pantalla cargaba bien, y al primer
+// guardado la peticion salia con el token muerto.
+//
+// Se desactiva ademas el ETag: asi el servidor responde 200 en lugar de 304 y
+// reemplaza de una vez las entradas ya envenenadas en los equipos afectados,
+// sin tener que ir maquina por maquina a limpiar la cache.
+//
+// Aparte, la clave de cache es la URL y NO incluye la cabecera Authorization:
+// en un equipo compartido, el token renovado de un usuario podia entregarse a
+// la sesion de otro. `no-store` cierra tambien esa puerta.
+app.set('etag', false);
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

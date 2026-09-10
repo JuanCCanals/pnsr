@@ -106,6 +106,27 @@ export function leerUsuario() {
   try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
 }
 
+/**
+ * Decide si una cabecera X-Token-Renovado puede sustituir al token actual.
+ *
+ * El servidor renueva el token cuando le queda poca vida y lo devuelve en esa
+ * cabecera. Pero el navegador puede REINYECTAR una cabecera antigua desde su
+ * cache al revalidar una peticion (responde 304 y conserva las cabeceras que el
+ * 304 no trae). Asi, una renovacion emitida dias atras pisaba el token recien
+ * obtenido en el login y dejaba la sesion muerta sin que nada lo delatara.
+ *
+ * Solo se acepta si esta vigente y no es anterior al que ya tenemos.
+ */
+export function esRenovacionValida(nuevo, actual) {
+  const leer = (t) => { try { return JSON.parse(atob(String(t).split('.')[1])); } catch { return null; } };
+  const n = leer(nuevo);
+  if (!n?.exp || n.exp * 1000 <= Date.now()) return false;   // ya vencida
+  if (!actual) return true;
+  const a = leer(actual);
+  if (!a?.iat || !n.iat) return true;
+  return n.iat >= a.iat;                                      // nunca ir hacia atras
+}
+
 export function borrarSesion() {
   tokenEnMemoria = null;
   usuarioEnMemoria = null;

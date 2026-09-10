@@ -5,6 +5,8 @@
  * 2. ApisNetPe - api.apis.net.pe (via proxy backend, evita CORS)
  */
 
+import { leerToken } from './sesion';
+
 const APISPERU_TOKEN = import.meta.env.VITE_APISPERU_TOKEN;
 const APISPERU_URL = import.meta.env.VITE_APISPERU_URL || 'https://dniruc.apisperu.com/api/v1';
 

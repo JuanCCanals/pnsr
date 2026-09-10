@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { leerToken, guardarToken, borrarSesion } from './sesion';
+import { leerToken, guardarToken, borrarSesion, esRenovacionValida } from './sesion';
 
 // Ajustamos el baseURL para incluir /api de forma global
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
@@ -34,7 +34,9 @@ api.interceptors.response.use(
     // middlewares/auth.js). Guardarlo aqui evita que la sesion venza de golpe
     // mientras el operador tiene un formulario a medio llenar.
     const renovado = response.headers?.['x-token-renovado'];
-    if (renovado) guardarToken(renovado);
+    // Se valida antes de aceptarla: el navegador puede reinyectar una cabecera
+    // vieja desde su cache y pisar el token bueno con uno ya caducado.
+    if (renovado && esRenovacionValida(renovado, leerToken())) guardarToken(renovado);
     return response;
   },
   (error) => {
