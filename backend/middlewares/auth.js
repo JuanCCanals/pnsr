@@ -56,8 +56,14 @@ module.exports = function authenticateToken(req, res, next) {
       // el servidor lo dice solo: que navegador, desde que pagina, y los
       // primeros caracteres del token para poder distinguir uno de otro sin
       // exponerlo entero.
-      const navegador = String(req.headers['user-agent'] || '')
-        .replace(/^Mozilla\/[\d.]+ /, '').slice(0, 90) || 'desconocido';
+      // OJO: Edge se identifica con "Edg/" AL FINAL del user-agent, despues de
+      // "Chrome/...". Recortar por el principio se come justo esa parte y hace
+      // imposible distinguir Edge de Chrome, que era el dato que hacia falta.
+      // Por eso se extrae una etiqueta corta en vez de recortar a ciegas.
+      const ua = String(req.headers['user-agent'] || '');
+      const m = ua.match(/\b(Edg|OPR|Firefox|Chrome)\/([\d]+)/g) || [];
+      const navegador = (m.length ? m.join(' ') : 'desconocido') +
+        (/Windows/.test(ua) ? ' [Windows]' : /Android/.test(ua) ? ' [Android]' : /iPhone|iPad/.test(ua) ? ' [iOS]' : '');
       const desdePagina = req.headers.referer || 'sin referer';
       const huella = token.slice(-12);   // cola del token: identifica sin exponer
 
