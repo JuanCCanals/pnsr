@@ -575,6 +575,7 @@ const CobrosReporte = () => {
   const [fHasta, setFHasta] = useState('');
   const [fMetodo, setFMetodo] = useState('');
   const [error, setError] = useState('');
+  const [fBuscar, setFBuscar] = useState('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -583,6 +584,7 @@ const CobrosReporte = () => {
     if (fDesde) p.set('desde', fDesde);
     if (fHasta) p.set('hasta', fHasta);
     if (fMetodo) p.set('metodo_pago_id', fMetodo);
+    if (fBuscar.trim()) p.set('buscar', fBuscar.trim());
     try {
       const r = await get(`/reportes/cobros?${p}`);
       if (r.success) {
@@ -600,7 +602,7 @@ const CobrosReporte = () => {
       setError('No se pudo conectar con el servidor. Los datos mostrados NO están completos.');
     }
     setLoading(false);
-  }, [fDesde, fHasta, fMetodo]);
+  }, [fDesde, fHasta, fMetodo, fBuscar]);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -614,8 +616,15 @@ const CobrosReporte = () => {
             <option value="">Todos</option>{metodos.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
           </select>
         </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Buscar comprobante o cliente</label>
+          <input value={fBuscar} onChange={e => setFBuscar(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') fetchData(); }}
+            placeholder="Ej: 1348 o un nombre"
+            className="px-3 py-2 border rounded-lg text-sm dark:bg-gray-700 dark:text-white w-56" />
+        </div>
         <button onClick={fetchData} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Filtrar</button>
-        <button onClick={() => { setFDesde(''); setFHasta(''); setFMetodo(''); setTimeout(fetchData, 50); }} className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
+        <button onClick={() => { setFDesde(''); setFHasta(''); setFMetodo(''); setFBuscar(''); setTimeout(fetchData, 50); }} className="px-4 py-2 border rounded-lg text-sm">Limpiar</button>
         <div className="flex-1" />
         <ExportBtn onClick={() => exportXlsx(rows.map(r => ({
           ID: r.id, Concepto: r.concepto || r.servicio_nombre_temp || '', Monto: r.monto,
@@ -639,7 +648,7 @@ const CobrosReporte = () => {
       <div className="overflow-x-auto border rounded-lg">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700">
-            <tr>{['#','Concepto','Monto','Fecha Cobro','Comprobante','Usuario','Método(s) Pago','Detalle Pagos','Fec. Operación','Hora Op.','Nro. Operación','Obs. Operación','Tipo Servicio','Fec. Servicio','Hora Serv.','Cliente','Teléfono','Observaciones'].map(h =>
+            <tr>{['N° interno','Concepto','Monto','Fecha Cobro','Comprobante','Usuario','Método(s) Pago','Detalle Pagos','Fec. Operación','Hora Op.','Nro. Operación','Obs. Operación','Tipo Servicio','Fec. Servicio','Hora Serv.','Cliente','Teléfono','Observaciones'].map(h =>
               <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y dark:divide-gray-600">

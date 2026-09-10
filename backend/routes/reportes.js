@@ -291,6 +291,7 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
   try {
     const desde=(req.query.desde||'').trim(), hasta=(req.query.hasta||'').trim();
     const metodo=(req.query.metodo_pago_id||'').trim();
+    const buscar=(req.query.buscar||'').trim();
     const w=[],a=[];
     // Excluir cobros anulados de los reportes contables
     w.push(`co.anulado = 0`);
@@ -301,8 +302,20 @@ router.get('/cobros', authenticateToken, authorizePermission('reportes'), async 
     // siguiente (son anteriores al dia 1), por lo que quedaban invisibles.
     // Se usa `< dia siguiente` en lugar de `DATE(fecha_cobro) <=` para no anular
     // el indice idx_fecha_cobro.
-    if(desde){w.push(`co.fecha_cobro >= ?`);a.push(desde);}
-    if(hasta){w.push(`co.fecha_cobro < DATE_ADD(?, INTERVAL 1 DAY)`);a.push(hasta);}
+    if(buscar){
+      // Busqueda directa de un comprobante (o de un cliente/concepto).
+      //
+      // Cuando se busca algo concreto se IGNORA el rango de fechas a proposito:
+      // quien escribe "1348" quiere encontrar ese comprobante, sea de cuando
+      // sea, y si el rango no lo abarca el sistema respondería "no existe" — que
+      // es justo el tipo de respuesta que hace desconfiar del reporte.
+      w.push(`(co.numero_comprobante LIKE ? OR cl.nombre LIKE ? OR co.concepto LIKE ?)`);
+      const p = `%${buscar}%`;
+      a.push(p, p, p);
+    } else {
+      if(desde){w.push(`co.fecha_cobro >= ?`);a.push(desde);}
+      if(hasta){w.push(`co.fecha_cobro < DATE_ADD(?, INTERVAL 1 DAY)`);a.push(hasta);}
+    }
     if(metodo){w.push(`cp.metodo_pago_id=?`);a.push(metodo);}
     const wSQL=w.length?`WHERE ${w.join(' AND ')}`:'';
     const [rows]=await pool.query(`
