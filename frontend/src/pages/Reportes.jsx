@@ -633,8 +633,6 @@ const CobrosReporte = () => {
           'Método(s) Pago': (r.metodo_pago || '') + (r.pago_usd ? ' (US$)' : ''), 'Detalle Pagos': r.detalle_pagos || '',
           'Fec. Operación': fmtDate(r.fecha_operacion), 'Hora Operación': r.hora_operacion || '',
           'Nro. Operación': r.nro_operacion || '', 'Obs. Operación': r.obs_operacion || '',
-          'Tipo Servicio': r.tipo_servicio || '',
-          'Fecha Servicio': fmtDate(r.fecha_servicio), 'Hora Servicio': r.hora_servicio || '',
           Cliente: r.cliente_nombre || '', Teléfono: r.cliente_telefono || '',
           Observaciones: r.observaciones || '',
         })), 'Ingresos_Cobros')} disabled={!rows.length} />
@@ -648,12 +646,16 @@ const CobrosReporte = () => {
       <div className="overflow-x-auto border rounded-lg">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-700">
-            <tr>{['N° interno','Concepto','Monto','Fecha Cobro','Comprobante','Usuario','Método(s) Pago','Detalle Pagos','Fec. Operación','Hora Op.','Nro. Operación','Obs. Operación','Tipo Servicio','Fec. Servicio','Hora Serv.','Cliente','Teléfono','Observaciones'].map(h =>
+            {/* Se quitaron 'Tipo Servicio', 'Fec. Servicio' y 'Hora Serv.': salen de la
+                tabla `servicios` a traves de cobros.servicio_id, que esta vacio en los
+                2.570 cobros. No eran celdas sin llenar, eran columnas que nunca
+                tuvieron dato y solo mostraban un guion en cada fila. */}
+            <tr>{['N° interno','Concepto','Monto','Fecha Cobro','Comprobante','Usuario','Método(s) Pago','Detalle Pagos','Fec. Operación','Hora Op.','Nro. Operación','Obs. Operación','Cliente','Teléfono','Observaciones'].map(h =>
               <th key={h} className="px-3 py-2 text-left text-xs font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y dark:divide-gray-600">
-            {loading && <tr><td colSpan={18} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
-            {!loading && !rows.length && <tr><td colSpan={18} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
+            {loading && <tr><td colSpan={15} className="px-3 py-6 text-center text-gray-500">Cargando…</td></tr>}
+            {!loading && !rows.length && <tr><td colSpan={15} className="px-3 py-6 text-center text-gray-500">Sin datos</td></tr>}
             {!loading && rows.map(r => (
               <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                 <td className="px-3 py-2 dark:text-white">{r.id}</td>
@@ -668,9 +670,6 @@ const CobrosReporte = () => {
                 <td className="px-3 py-2 dark:text-white">{r.hora_operacion || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.nro_operacion || '—'}</td>
                 <td className="px-3 py-2 dark:text-white text-xs max-w-xs truncate">{r.obs_operacion || '—'}</td>
-                <td className="px-3 py-2 dark:text-white">{r.tipo_servicio || '—'}</td>
-                <td className="px-3 py-2 dark:text-white whitespace-nowrap">{fmtDate(r.fecha_servicio)}</td>
-                <td className="px-3 py-2 dark:text-white">{r.hora_servicio || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.cliente_nombre || '—'}</td>
                 <td className="px-3 py-2 dark:text-white">{r.cliente_telefono || '—'}</td>
                 <td className="px-3 py-2 dark:text-white max-w-xs truncate">{r.observaciones || '—'}</td>
