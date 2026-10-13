@@ -377,11 +377,14 @@ const Zonas = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
               <div className="text-blue-600 dark:text-blue-400 text-sm font-medium">Total Zonas</div>
-              <div className="text-2xl font-bold text-blue-800 dark:text-blue-300">{stats.totalZonas}</div>
+              {/* /zonas/stats responde { total, activas, con_familias, total_familias }.
+                  Antes se leian totalZonas y totalFamiliasRegistradas, que no existen,
+                  y las dos tarjetas quedaban vacias. */}
+              <div className="text-2xl font-bold text-blue-800 dark:text-blue-300">{stats.total ?? 0}</div>
             </div>
             <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg">
               <div className="text-yellow-600 dark:text-yellow-400 text-sm font-medium">Total Familias</div>
-              <div className="text-2xl font-bold text-yellow-800 dark:text-yellow-300">{stats.totalFamiliasRegistradas}</div>
+              <div className="text-2xl font-bold text-yellow-800 dark:text-yellow-300">{stats.total_familias ?? 0}</div>
             </div>
           </div>
         )}
