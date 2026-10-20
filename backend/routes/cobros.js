@@ -80,19 +80,42 @@ async function ensureCliente(connection, nombre, dni = '', telefono = '', email 
   }
 
   // 2) Buscar por nombre exacto
-  const [r2] = await connection.query('SELECT id FROM clientes WHERE nombre = ? LIMIT 1', [nom]);
-  if (r2.length) {
-    // Actualizar telefono/email si vienen
-    if (tel || mail) {
-      const sets = []; const vals = [];
+  //
+  // Con documento solo se reutiliza un cliente del mismo nombre que AUN NO tenga
+  // documento, y se le guarda el que llega. Antes se tomaba cualquier cliente con
+  // ese nombre y el documento se descartaba en silencio: al editar un comprobante
+  // para agregarle el DNI, el ticket seguia saliendo con "DNI: —" (T001-00003382,
+  // 19/10/2026). Y si el del mismo nombre tenia OTRO documento (un homonimo), el
+  // cobro quedaba a nombre de otra persona y el ticket salia con su DNI.
+  if (doc) {
+    const [r2] = await connection.query(
+      "SELECT id FROM clientes WHERE nombre = ? AND (dni IS NULL OR dni = '') ORDER BY id LIMIT 1",
+      [nom]
+    );
+    if (r2.length) {
+      const sets = ['dni = ?']; const vals = [doc];
       if (tel) { sets.push('telefono = ?'); vals.push(tel); }
       if (mail) { sets.push('email = ?'); vals.push(mail); }
-      if (sets.length) {
-        vals.push(r2[0].id);
-        await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
-      }
+      vals.push(r2[0].id);
+      await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
+      return r2[0].id;
     }
-    return r2[0].id;
+    // Sin coincidencia sin documento: es una persona nueva (o un homonimo) -> paso 3
+  } else {
+    const [r2] = await connection.query('SELECT id FROM clientes WHERE nombre = ? LIMIT 1', [nom]);
+    if (r2.length) {
+      // Actualizar telefono/email si vienen
+      if (tel || mail) {
+        const sets = []; const vals = [];
+        if (tel) { sets.push('telefono = ?'); vals.push(tel); }
+        if (mail) { sets.push('email = ?'); vals.push(mail); }
+        if (sets.length) {
+          vals.push(r2[0].id);
+          await connection.execute(`UPDATE clientes SET ${sets.join(', ')} WHERE id = ?`, vals);
+        }
+      }
+      return r2[0].id;
+    }
   }
 
   // 3) Crear nuevo
