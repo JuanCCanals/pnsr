@@ -196,10 +196,19 @@ async function parseWorkbook(buffer) {
     .getRow(headerRow)
     .values.map((v) => (typeof v === 'object' && v?.text ? v.text : v));
   const idx = {};
+  // La plantilla "Modelo" repite el encabezado "Nº FAMILIA": la columna 1 es la
+  // del responsable y la 7 la de los dependientes. Antes se quedaba la ultima, y
+  // las familias SIN dependientes (columna 7 vacia) se fundian en una sola: un
+  // archivo de 50 familias se leia como 43 (RIMAC, 21/10/2026). Para el numero de
+  // familia se guardan todas esas columnas y en cada fila se usa la primera con valor.
+  const colsNro = [];
   titles.forEach((t, i) => {
     const k = headerMap(t);
-    if (k) idx[k] = i;
+    if (!k) return;
+    if (k === 'NRO_FAMILIA') colsNro.push(i);
+    idx[k] = i;
   });
+  if (colsNro.length) idx.NRO_FAMILIA = colsNro[0];
 
   const required = ['NRO_FAMILIA', 'DIRECCION', 'RELACION', 'INTEG_NOMBRES'];
   const faltantes = required.filter((k) => !idx[k]);
@@ -222,8 +231,7 @@ async function parseWorkbook(buffer) {
   for (let r = headerRow + 1; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
 
-    const get = (k) => {
-      const pos = idx[k];
+    const leer = (pos) => {
       if (!pos) return '';
       const cell = row.getCell(pos);
       if (!cell || cell.value == null) return '';
@@ -232,8 +240,9 @@ async function parseWorkbook(buffer) {
       }
       return String(cell.text || cell.value || '').trim();
     };
+    const get = (k) => leer(idx[k]);
 
-    const nro = get('NRO_FAMILIA');
+    const nro = colsNro.map(leer).find(Boolean) || '';
     const direccion = get('DIRECCION');
     if (!nro && !direccion) continue; // fila vacía o irrelevante
 
@@ -296,6 +305,25 @@ async function parseWorkbook(buffer) {
 
   // ==== VALIDACIONES FINALES ====
   const validationErrors = [];
+
+  // Filas con direccion pero sin numero de familia: se agrupaban todas bajo la
+  // clave '' y varias familias distintas terminaban fundidas en una sola, sin
+  // ningun aviso. Mejor detener la importacion y decir que filas revisar.
+  if (grupos.has('')) {
+    const filasSinNro = [];
+    for (let r = headerRow + 1; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const leer = (pos) => (pos ? String(row.getCell(pos).text || '').trim() : '');
+      if (!colsNro.map(leer).find(Boolean) && leer(idx.DIRECCION)) filasSinNro.push(r);
+    }
+    validationErrors.push({
+      type: 'SIN_NRO_FAMILIA',
+      message: `Fila(s) Excel ${filasSinNro.join(', ')}: tienen dirección pero no número de familia. Escriba el Nº de familia en esas filas y vuelva a intentar.`,
+      row: filasSinNro[0] || null,
+    });
+    grupos.delete('');
+  }
+
   for (const [key, pack] of grupos) {
     const fam = pack.familia;
     const dir = (fam.direccion || '').trim();
@@ -311,7 +339,7 @@ async function parseWorkbook(buffer) {
 
   if (validationErrors.length) {
     const err = new Error(
-      'Se encontraron familias con dirección vacía. Corrige el archivo y vuelve a intentar.'
+      'El archivo tiene datos por corregir (ver el detalle). Corrígelo y vuelve a intentar.'
     );
     err.isValidation = true;
     err.validationErrors = validationErrors;
@@ -581,3 +609,5 @@ router.post('/', auth, uploadExcelGate, async (req, res) => {
 });
 
 module.exports = router;
+// Expuesta para poder probar la lectura de un Excel sin pasar por HTTP ni la BD.
+module.exports.parseWorkbook = parseWorkbook;
