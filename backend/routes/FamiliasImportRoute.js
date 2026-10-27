@@ -28,6 +28,13 @@ const relNorm = (s) => {
   if (x.startsWith('PADRE')) return 'padre';
   if (x.startsWith('MADRE')) return 'madre';
 
+  // Hijastros y hermanastros ANTES que hijos y hermanos: "HIJASTRO" empieza con
+  // "HIJA" y "HERMANASTRO" con "HERMANA", y se leian como mujeres.
+  if (x.startsWith('HIJASTRO')) return 'hijastro';
+  if (x.startsWith('HIJASTRA')) return 'hijastra';
+  if (x.startsWith('HERMANASTRO')) return 'hermano';
+  if (x.startsWith('HERMANASTRA')) return 'hermana';
+
   // Hijos directos
   if (x.startsWith('HIJO')) return 'hijo';
   if (x.startsWith('HIJA')) return 'hija';
@@ -56,11 +63,9 @@ const relNorm = (s) => {
   if (x.startsWith('YERNO')) return 'yerno';
   if (x.startsWith('NUERA')) return 'nuera';
 
-  // Padrastros / Hijastros
+  // Padrastros
   if (x.startsWith('PADRASTRO')) return 'padrastro';
   if (x.startsWith('MADRASTRA')) return 'madrastra';
-  if (x.startsWith('HIJASTRO')) return 'hijastro';
-  if (x.startsWith('HIJASTRA')) return 'hijastra';
 
   // Cónyuge / Esposo(a)
   if (x.startsWith('CONYUGE') || x.startsWith('CONYUGUE')) return 'conyuge';
@@ -80,6 +85,23 @@ const relNorm = (s) => {
   if (x.startsWith('OTRO')) return 'otro';
 
   return 'otro';
+};
+
+// Relaciones que solo admiten un sexo (para detectar "HIJA" con sexo M, etc.)
+const REL_MASCULINAS = new Set(['padre', 'hijo', 'abuelo', 'nieto', 'hermano', 'tio', 'sobrino',
+  'suegro', 'yerno', 'padrastro', 'hijastro', 'esposo', 'primo']);
+const REL_FEMENINAS = new Set(['madre', 'hija', 'abuela', 'nieta', 'hermana', 'tia', 'sobrina',
+  'suegra', 'nuera', 'madrastra', 'hijastra', 'esposa', 'prima']);
+
+// SEXO: solo M (masculino) o F (femenino), como indica la plantilla. Antes se
+// tomaba la primera letra y un archivo llenado con H/M (Hombre/Mujer) se grababa
+// al reves sin ningun aviso: en San Borja las mujeres quedaron como hombres y
+// los hombres sin sexo (27/10/2026). Cualquier otro valor detiene la importacion.
+const sexoDe = (raw) => {
+  const s = norm(raw);
+  if (s === 'M' || s === 'MASCULINO') return 'M';
+  if (s === 'F' || s === 'FEMENINO') return 'F';
+  return null;
 };
 
 // Procesa edad: devuelve { fecha_nacimiento, edad_texto }
@@ -226,7 +248,19 @@ async function parseWorkbook(buffer) {
     throw err;
   }
 
+  // ¿El dependiente es el propio titular repetido? Todas las palabras de su
+  // nombre tienen que estar en el nombre del titular ("ELENA" en "ELENA NAVARRO
+  // ROSADO" si; "FLOR ROSADO" no).
+  const palabras = (s) => new Set(norm(s).split(' ').filter(Boolean));
+  const esMismaPersona = (dependiente, titular) => {
+    const d = palabras(dependiente), t = palabras(titular);
+    return d.size > 0 && t.size > 0 && [...d].every((p) => t.has(p));
+  };
+
   const grupos = new Map();
+  // Errores de llenado, uno por fila: se informan todos juntos para corregir el
+  // archivo de una sola vez, en lugar de adivinar lo que se quiso decir.
+  const erroresFila = [];
 
   for (let r = headerRow + 1; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
@@ -242,9 +276,9 @@ async function parseWorkbook(buffer) {
     };
     const get = (k) => leer(idx[k]);
 
-    const nro = colsNro.map(leer).find(Boolean) || '';
+    const nros = colsNro.map(leer).filter(Boolean);
+    const nro = nros[0] || '';
     const direccion = get('DIRECCION');
-    if (!nro && !direccion) continue; // fila vacía o irrelevante
 
     // Familia (se repiten por fila → nos quedamos con el primer valor no vacío)
     const padre = [get('PADRE_NOMBRES'), get('PADRE_APELLIDOS')]
@@ -265,8 +299,19 @@ async function parseWorkbook(buffer) {
     const edadRaw = get('EDAD') || null;
     const edadProcesada = procesarEdad(edadRaw);
     const cond = get('CONDICION') || null;
-    const sexoRaw = (get('SEXO') || '').toUpperCase();
-    const sexo = sexoRaw.startsWith('M') ? 'M' : sexoRaw.startsWith('F') ? 'F' : null;
+    const sexoRaw = get('SEXO');
+    const sexo = sexoDe(sexoRaw);
+    const relRaw = get('RELACION');
+
+    // Una fila con datos pero sin Nº de familia antes se descartaba en silencio
+    // (sin direccion) o se fundia con otras (con direccion): San Borja, el
+    // dependiente "B" (27/10/2026). Ahora se informa.
+    if (!nro) {
+      if (direccion || padre || madre || nombreInt || relRaw || sexoRaw) {
+        erroresFila.push({ row: r, nro: '', nombre: nombreInt, detalles: ['no tiene número de familia'] });
+      }
+      continue;
+    }
 
     const key = String(nro);
 
@@ -291,7 +336,27 @@ async function parseWorkbook(buffer) {
     if (!g.familia.madre && madre) g.familia.madre = madre;
     if (!g.familia.total && total != null) g.familia.total = total;
 
-    if (nombreInt && !(rel === 'padre' || rel === 'madre')) {
+    // Un PADRE o MADRE entre los dependientes se descartaba SIEMPRE, asumiendo
+    // que era el titular repetido. Pero suele ser el padre o la madre del titular
+    // (abuelos de los ninos) y se perdia: San Borja, familia 20, "Flor Rosado"
+    // (27/10/2026). Solo se omite si es la misma persona que el titular.
+    const esTitularRepetido = (rel === 'padre' || rel === 'madre') &&
+      [g.familia.padre, g.familia.madre].some((t) => t && esMismaPersona(nombreInt, t));
+
+    const detalles = [];
+    if (new Set(nros).size > 1) detalles.push(`tiene dos números de familia distintos (${[...new Set(nros)].join(' y ')})`);
+    if (nombreInt && !esTitularRepetido) {
+      if (nombreInt.replace(/[^\p{L}]/gu, '').length < 2) detalles.push(`el nombre «${nombreInt}» está incompleto`);
+      if (!relRaw) detalles.push('falta la relación (HIJO, HIJA, NIETO...)');
+      if (!sexoRaw) detalles.push('falta el sexo (M o F)');
+      else if (!sexo) detalles.push(`el sexo «${sexoRaw}» no es válido (solo M o F)`);
+      else if (relRaw && ((sexo === 'F' && REL_MASCULINAS.has(rel)) || (sexo === 'M' && REL_FEMENINAS.has(rel)))) {
+        detalles.push(`la relación es ${norm(relRaw)} pero el sexo es ${sexo}`);
+      }
+    }
+    if (detalles.length) erroresFila.push({ row: r, nro, nombre: nombreInt, detalles });
+
+    if (nombreInt && !esTitularRepetido) {
       g.integrantes.push({
         nombre: nombreInt,
         relacion: rel,
@@ -306,22 +371,13 @@ async function parseWorkbook(buffer) {
   // ==== VALIDACIONES FINALES ====
   const validationErrors = [];
 
-  // Filas con direccion pero sin numero de familia: se agrupaban todas bajo la
-  // clave '' y varias familias distintas terminaban fundidas en una sola, sin
-  // ningun aviso. Mejor detener la importacion y decir que filas revisar.
-  if (grupos.has('')) {
-    const filasSinNro = [];
-    for (let r = headerRow + 1; r <= ws.rowCount; r++) {
-      const row = ws.getRow(r);
-      const leer = (pos) => (pos ? String(row.getCell(pos).text || '').trim() : '');
-      if (!colsNro.map(leer).find(Boolean) && leer(idx.DIRECCION)) filasSinNro.push(r);
-    }
+  for (const e of erroresFila) {
     validationErrors.push({
-      type: 'SIN_NRO_FAMILIA',
-      message: `Fila(s) Excel ${filasSinNro.join(', ')}: tienen dirección pero no número de familia. Escriba el Nº de familia en esas filas y vuelva a intentar.`,
-      row: filasSinNro[0] || null,
+      type: 'DATO_INVALIDO',
+      message: `Fila ${e.row}${e.nro ? ` (familia ${e.nro})` : ''}${e.nombre ? `, ${e.nombre}` : ''}: ${e.detalles.join('; ')}.`,
+      nro_familia: e.nro || null,
+      row: e.row,
     });
-    grupos.delete('');
   }
 
   for (const [key, pack] of grupos) {
