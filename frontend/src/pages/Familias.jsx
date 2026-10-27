@@ -571,18 +571,25 @@ const Familias = () => {
       });
       
       if (response?.success && response.data?.length > 0) {
-        // Preparar datos para impresión usando la estructura existente
-        const familiasParaImprimir = response.data.map(fam => ({
-          familia: {
-            id: fam.id,
-            codigo_unico: fam.codigo_unico,
-            nombre_padre: fam.nombre_padre || '',
-            nombre_madre: fam.nombre_madre || '',
-            direccion: fam.direccion || '',
-            zona_nombre: fam.zona_nombre || '',
-            zona_abreviatura: fam.zona_abreviatura || ''
-          },
-          integrantes: []
+        // Antes las etiquetas por rango se armaban con `integrantes: []` y salian
+        // solo con el titular (RIM003 a RIM006, 27/10/2026). Se cargan igual que
+        // en la impresion por zona. Si falla la carga, se aborta con aviso: mejor
+        // no imprimir que imprimir etiquetas incompletas sin que nadie lo note.
+        const familiasParaImprimir = await Promise.all(response.data.map(async (fam) => {
+          const res = await familiasService.getIntegrantes(fam.id);
+          if (!res?.success) throw new Error(`No se pudieron cargar los integrantes de ${fam.codigo_unico}`);
+          return {
+            familia: {
+              id: fam.id,
+              codigo_unico: fam.codigo_unico,
+              nombre_padre: fam.nombre_padre || '',
+              nombre_madre: fam.nombre_madre || '',
+              direccion: fam.direccion || '',
+              zona_nombre: fam.zona_nombre || '',
+              zona_abreviatura: fam.zona_abreviatura || ''
+            },
+            integrantes: res.data || []
+          };
         }));
         
         // Usar la función de impresión existente
