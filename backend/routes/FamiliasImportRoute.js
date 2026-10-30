@@ -28,6 +28,16 @@ const relNorm = (s) => {
   if (x.startsWith('PADRE')) return 'padre';
   if (x.startsWith('MADRE')) return 'madre';
 
+  // Formas familiares que se escriben en los Excel. Antes caian en "otro" y la
+  // etiqueta decia OTRO (Cañete, Cuna Matazango, Manchay, San Juan de Lurigancho,
+  // 30/10/2026). `norm` ya quito las tildes: MAMÁ llega como MAMA y CUÑADO como CUNADO.
+  if (/^(MAMA|MAMI|MAMITA)\b/.test(x)) return 'madre';
+  if (/^(PAPA|PAPI|PAPITO)\b/.test(x)) return 'padre';
+  if (x.startsWith('ABUELITO')) return 'abuelo';
+  if (x.startsWith('ABUELITA')) return 'abuela';
+  if (x.startsWith('CUNADO')) return 'cuñado';
+  if (x.startsWith('CUNADA')) return 'cuñada';
+
   // Hijastros y hermanastros ANTES que hijos y hermanos: "HIJASTRO" empieza con
   // "HIJA" y "HERMANASTRO" con "HERMANA", y se leian como mujeres.
   if (x.startsWith('HIJASTRO')) return 'hijastro';
@@ -89,9 +99,9 @@ const relNorm = (s) => {
 
 // Relaciones que solo admiten un sexo (para detectar "HIJA" con sexo M, etc.)
 const REL_MASCULINAS = new Set(['padre', 'hijo', 'abuelo', 'nieto', 'hermano', 'tio', 'sobrino',
-  'suegro', 'yerno', 'padrastro', 'hijastro', 'esposo', 'primo']);
+  'suegro', 'yerno', 'padrastro', 'hijastro', 'esposo', 'primo', 'cuñado']);
 const REL_FEMENINAS = new Set(['madre', 'hija', 'abuela', 'nieta', 'hermana', 'tia', 'sobrina',
-  'suegra', 'nuera', 'madrastra', 'hijastra', 'esposa', 'prima']);
+  'suegra', 'nuera', 'madrastra', 'hijastra', 'esposa', 'prima', 'cuñada']);
 
 // SEXO: solo M (masculino) o F (femenino), como indica la plantilla. Antes se
 // tomaba la primera letra y un archivo llenado con H/M (Hombre/Mujer) se grababa
@@ -348,6 +358,12 @@ async function parseWorkbook(buffer) {
     if (nombreInt && !esTitularRepetido) {
       if (nombreInt.replace(/[^\p{L}]/gu, '').length < 2) detalles.push(`el nombre «${nombreInt}» está incompleto`);
       if (!relRaw) detalles.push('falta la relación (HIJO, HIJA, NIETO...)');
+      // Una relacion que no se reconoce se guardaba como "otro" sin aviso: un
+      // "HJO" o un "HERMAN" salian como OTRO en la etiqueta. Solo se acepta "otro"
+      // si es lo que se escribio.
+      else if (rel === 'otro' && !/^OTR[OA]\b/.test(norm(relRaw))) {
+        detalles.push(`la relación «${relRaw}» no se reconoce (use HIJO, HIJA, NIETO, MADRE, etc.)`);
+      }
       if (!sexoRaw) detalles.push('falta el sexo (M o F)');
       else if (!sexo) detalles.push(`el sexo «${sexoRaw}» no es válido (solo M o F)`);
       else if (relRaw && ((sexo === 'F' && REL_MASCULINAS.has(rel)) || (sexo === 'M' && REL_FEMENINAS.has(rel)))) {
