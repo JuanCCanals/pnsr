@@ -291,12 +291,16 @@ async function parseWorkbook(buffer) {
     const direccion = get('DIRECCION');
 
     // Familia (se repiten por fila → nos quedamos con el primer valor no vacío)
-    const padre = [get('PADRE_NOMBRES'), get('PADRE_APELLIDOS')]
+    // Un guion en el nombre del padre o de la madre significa "no hay". La Molina
+    // puso "-" en ambas columnas y se guardaba "- -" como si fuera un nombre: la
+    // etiqueta decia "PAPA: - -" y lo contaba como un miembro mas (PLM002, 02/11/2026).
+    const parteNombre = (k) => (/^[\s\-–—._]*$/.test(get(k)) ? '' : get(k));
+    const padre = [parteNombre('PADRE_NOMBRES'), parteNombre('PADRE_APELLIDOS')]
       .filter(Boolean)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
-    const madre = [get('MADRE_NOMBRES'), get('MADRE_APELLIDOS')]
+    const madre = [parteNombre('MADRE_NOMBRES'), parteNombre('MADRE_APELLIDOS')]
       .filter(Boolean)
       .join(' ')
       .replace(/\s+/g, ' ')
