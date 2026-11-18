@@ -225,11 +225,14 @@ router.get('/labels/bulk', authenticateToken, authorizePermission('familias.leer
     }
 
     // Obtener integrantes para todas estas familias de una sola vez
+    // edad_texto es lo que imprime la etiqueta. Sin el, una edad en meses ("7 M",
+    // "3 MESES"), que no tiene fecha de nacimiento, salia en blanco al imprimir por
+    // zona; por rango o de a una si salia (BRIDGES ZONA 1, 18/11/2026).
     const ids = familiasRows.map(f => f.id);
     const placeholders = ids.map(() => '?').join(',');
     const [integrantesRows] = await pool.execute(`
-      SELECT 
-        id, familia_id, nombre, fecha_nacimiento, relacion, sexo, observaciones
+      SELECT
+        id, familia_id, nombre, fecha_nacimiento, edad_texto, relacion, sexo, observaciones
       FROM integrantes_familia
       WHERE familia_id IN (${placeholders})
       ORDER BY 
