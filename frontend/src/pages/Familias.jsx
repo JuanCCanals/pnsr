@@ -353,10 +353,10 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
       <div
         style={{
           position: 'absolute',
+          left: '50%',
           transform: 'translateX(-50%)',
-          top: '5mm',
-          right: '5mm',        // ← respiro de 5mm
-          textAlign: 'right',  // ← alinear a la derecha
+          top: '8mm',
+          textAlign: 'center', // igual que la impresion: centrado en la parte desglosable
         }}
       >
 
@@ -368,8 +368,8 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
 
       </div>
 
-      {/* Dejo ~15mm de aire bajo la cabecera */}
-      <div style={{ height: '15mm' }} />
+      {/* El cuerpo va debajo de la parte desglosable, como en la impresion */}
+      <div style={{ height: '30mm' }} />
 
       {/* Zona + totales + observaciones + padres */}
       <div className="flex items-start justify-between">
@@ -384,7 +384,6 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
             <div><span className="font-medium">MAMA:</span> {madreFull || "—"}</div>
           </div>
         </div>
-        <div className="shrink-0 w-[40mm]" />
       </div>
 
       {/* Tablas: siempre dos columnas; si no hay col2, dejamos un placeholder sin cabecera */}
@@ -405,8 +404,6 @@ const Label80 = React.forwardRef(function Label80({ familia, integrantes }, ref)
       </div>
 
 
-      {/* Espacio para no chocar con el footer */}
-      <div className="h-[16mm]" />
 
       {/* FOOTER: barcode centrado al pie */}
       <div
@@ -756,8 +753,9 @@ const Familias = () => {
             <div class="code">${escapeHtml(familiaCode)}</div>
           </div>
   
-          <!-- subir 10mm: de 20mm a 10mm -->
-          <div style="height:10mm"></div>
+          <!-- El rollo nuevo trae la parte desglosable ARRIBA (24/11/2026): el cuerpo
+               baja hasta debajo del troquel; antes eran 10mm. -->
+          <div style="height:30mm"></div>
   
           <!-- Zona + totales + observaciones + padres -->
           <div class="row">
@@ -775,7 +773,6 @@ const Familias = () => {
                 <div><span class="b">MAMA:</span> ${escapeHtml(madreFull || "—")}</div>
               </div>
             </div>
-            <div class="colR"></div>
           </div>
   
           <!-- TABLAS -->
@@ -824,7 +821,8 @@ const Familias = () => {
     }
     .etiqueta:last-child { page-break-after: auto; }
   
-    .hdr { position: absolute; top: 3mm; right: 5mm; text-align: right; }
+    /* Codigo superior centrado dentro de la parte desglosable (antes: arriba a la derecha) */
+    .hdr { position: absolute; top: 8mm; left: 50%; transform: translateX(-50%); text-align: center; }
     .ftr { position: absolute; left: 50%; transform: translateX(-50%); bottom: 3mm; text-align: center; }
     .bar { display: block; }
   
@@ -837,7 +835,7 @@ const Familias = () => {
   
     /* +1px: zona y padres */
     .zona { font-weight: 600; font-size: 13px; }            /* antes 12px */
-    .padres { margin-top: 3mm; font-size: 12px; line-height: 1.15; } /* antes 11px */
+    .padres { margin-top: 2mm; font-size: 12px; line-height: 1.15; } /* antes 11px */
     .b { font-weight: 600; }
   
     .grid { margin-top: 2mm; display: grid; gap: 1mm; }
@@ -852,7 +850,7 @@ const Familias = () => {
     table.tabla thead tr { background: #eee; }
     table.tabla th, table.tabla td {
       border: 0.35mm solid #000;
-      padding: 0.6mm 1mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      padding: 0.4mm 1mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
   
     /* ⛔ encabezado SIN cambio */
