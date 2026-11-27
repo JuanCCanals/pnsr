@@ -93,9 +93,27 @@ router.get('/', authenticateToken, authorizePermission('familias.leer'), async (
     }
     
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-    
+
     // Consulta principal con paginación
     const offset = (page - 1) * limit;
+
+    // Estado de la caja de la familia (cada familia tiene una). Antes no se
+    // enviaba y la columna "Estado Caja" mostraba siempre "SIN VENDER", aunque
+    // la caja estuviera vendida (MUS003, 26/11/2026).
+    const ESTADO_CAJA_SQL = '(SELECT c.estado FROM cajas c WHERE c.familia_id = f.id ORDER BY c.id DESC LIMIT 1)';
+
+    // Ordenamiento por columna. Antes se ignoraba sort_by y siempre salia por
+    // codigo. Solo columnas de esta lista: el valor no se pega tal cual al SQL.
+    const ORDENES = {
+      codigo_unico: 'f.codigo_unico',
+      zona_nombre: 'z.nombre',
+      titular: "COALESCE(NULLIF(TRIM(f.nombre_padre), ''), TRIM(f.nombre_madre))",
+      total_integrantes: 'total_integrantes',
+      // Sin vender primero y luego en el orden en que avanza la caja
+      estado_caja: `FIELD(COALESCE(${ESTADO_CAJA_SQL}, 'disponible'), 'disponible', 'asignada', 'entregada', 'devuelta', 'entregada_familia')`,
+    };
+    const ordenCol = ORDENES[req.query.sort_by] || ORDENES.codigo_unico;
+    const ordenDir = String(req.query.sort_dir || '').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
 
 const [rows] = await pool.execute(`
   SELECT
@@ -113,11 +131,12 @@ const [rows] = await pool.execute(`
     z.nombre as zona_nombre,
     z.abreviatura as zona_abreviatura,
     (SELECT COUNT(*) FROM integrantes_familia i WHERE i.familia_id = f.id) AS total_integrantes,
-    (SELECT COUNT(*) FROM cajas c WHERE c.familia_id = f.id) AS total_cajas
+    (SELECT COUNT(*) FROM cajas c WHERE c.familia_id = f.id) AS total_cajas,
+    ${ESTADO_CAJA_SQL} AS estado_caja
   FROM familias f
   LEFT JOIN zonas z ON f.zona_id = z.id
   ${whereClause}
-  ORDER BY f.codigo_unico
+  ORDER BY ${ordenCol} ${ordenDir}, f.codigo_unico ${ordenCol === ORDENES.codigo_unico ? ordenDir : 'ASC'}
   LIMIT ? OFFSET ?
 `, [...queryParams, parseInt(limit), parseInt(offset)]);
 

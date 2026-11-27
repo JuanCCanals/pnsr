@@ -35,6 +35,30 @@ function pickTitular(f) {
   return p || m || '';
 }
 
+// Texto del estado de la caja en la lista, el detalle y el Excel de Familias.
+// "disponible" (o sin dato) se muestra como SIN VENDER.
+const ESTADO_CAJA_TEXTO = {
+  asignada: "Asignada",
+  entregada: "Entregada a Benefactor",
+  devuelta: "Devuelta por Benefactor",
+  entregada_familia: "Entregada a Familia",
+};
+function textoEstadoCaja(estado) {
+  const k = String(estado || "").toLowerCase();
+  if (!k || k === "disponible") return "SIN VENDER";
+  return ESTADO_CAJA_TEXTO[k] || estado;
+}
+// Mismos colores que la pestaña Cajas
+function claseEstadoCaja(estado) {
+  switch (String(estado || "").toLowerCase()) {
+    case "entregada": return "bg-orange-100 text-orange-800";
+    case "devuelta": return "bg-green-100 text-green-800";
+    case "entregada_familia": return "bg-blue-100 text-blue-800";
+    case "asignada": return "bg-yellow-100 text-yellow-800";
+    default: return "bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-200";
+  }
+}
+
 // Mapea fila → columnas del Excel
 function mapFamiliaRow(f) {
   return {
@@ -42,7 +66,7 @@ function mapFamiliaRow(f) {
     Zona: f.zona_nombre ?? f.zona ?? "",
     Titular: pickTitular(f),
     Integrantes: Number(f.total_integrantes ?? f.integrantes ?? 0),
-    Estado: f.estado_caja ?? f.estado ?? "",
+    Estado: textoEstadoCaja(f.estado_caja),
   };
 }
 
@@ -1013,6 +1037,12 @@ const Familias = () => {
     const d = await familiasService.getById(fila.id);
     let fam = d?.success ? d.data : fila; // fallback
     const ints = await familiasService.getIntegrantes(fila.id);
+    // Estado y benefactor salen de la caja de la familia; el benefactor solo
+    // si la caja esta vendida (al anular una venta la caja vuelve a disponible).
+    const caja = Array.isArray(fam?.cajas) && fam.cajas.length ? fam.cajas[0] : null;
+    const estadoCaja = caja?.estado ?? fila.estado_caja ?? null;
+    const vendida = !!estadoCaja && String(estadoCaja).toLowerCase() !== "disponible";
+    fam = { ...fam, estado_caja: estadoCaja, benefactor: vendida ? (caja?.benefactor_nombre || "") : "" };
     setDetalle(fam);
     setIntegrantes(ints?.success ? ints.data : []);
     setShowDetalle(true);
@@ -1247,8 +1277,8 @@ const Familias = () => {
                   <td className="px-5 py-3">{pickTitular(f)}</td>
                   <td className="px-5 py-3 whitespace-nowrap">{f.total_integrantes || 0}</td>
                   <td className="px-5 py-3 whitespace-nowrap">
-                    <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900 dark:text-gray-200">
-                      {f.estado_caja || "SIN VENDER"}
+                    <span className={`px-2 py-1 text-xs rounded-full ${claseEstadoCaja(f.estado_caja)}`}>
+                      {textoEstadoCaja(f.estado_caja)}
                     </span>
                   </td>
                   <td className="px-5 py-3 whitespace-nowrap text-right">
@@ -1413,7 +1443,7 @@ const Familias = () => {
             </div>
             <div>
               <label className="block text-sm text-gray-600">Estado (caja)</label>
-              <input className="w-full border rounded px-2 py-1" value={detalle.estado_caja || "SIN VENDER"} readOnly />
+              <input className="w-full border rounded px-2 py-1" value={textoEstadoCaja(detalle.estado_caja)} readOnly />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Benefactor</label>
